@@ -39,11 +39,20 @@ function stopDir(stopId: string): string | null {
 }
 
 /**
+ * Some routes carry no shapes of their own but run along another line's track.
+ * Map them to a route whose shapes we can borrow for interpolation.
+ *   W  -> N  (Broadway line)
+ */
+const ROUTE_ALIAS: Record<string, string> = { W: "N" };
+
+/**
  * Realtime uses express suffixes (6X, 7X, FX, 5X) that share geometry with the
- * base route. Normalize to the base route id used by static shapes.
+ * base route. Normalize to the base route id used by static shapes, applying
+ * shapeless-route aliases too.
  */
 function baseRoute(routeId: string): string {
-  return routeId.endsWith("X") ? routeId.slice(0, -1) : routeId;
+  const noX = routeId.endsWith("X") ? routeId.slice(0, -1) : routeId;
+  return ROUTE_ALIAS[noX] ?? noX;
 }
 
 export function buildActiveLegs(feed: FeedTrip[], stat: StaticData): ActiveLeg[] {

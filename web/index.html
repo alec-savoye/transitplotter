@@ -98,6 +98,43 @@
       .st-alert.sev-3 { border-left-color: #c0392b; }
       .st-alert.sev-2 { border-left-color: #e8730c; }
 
+      /* Trip planner (bottom-right) */
+      #planner {
+        position: absolute; bottom: 28px; right: 10px; z-index: 15;
+        width: 300px; max-width: 88vw; background: #fff; color: #111;
+        border-radius: 10px; box-shadow: 0 2px 12px rgba(0,0,0,0.3);
+        padding: 10px; font-size: 13px;
+      }
+      #planner .pl-head { font-weight: 700; margin-bottom: 8px; }
+      #planner input {
+        width: 100%; box-sizing: border-box; margin-bottom: 6px; padding: 7px 8px;
+        border: 1px solid #ccc; border-radius: 6px; font-size: 13px;
+      }
+      #pl-go {
+        width: 100%; padding: 8px; border: 0; border-radius: 6px;
+        background: #0b60d6; color: #fff; font-weight: 700; cursor: pointer;
+      }
+      #pl-go:hover { background: #094ea8; }
+      #pl-result { margin-top: 10px; }
+      .pl-summary { font-size: 15px; margin-bottom: 8px; }
+      .pl-loading, .pl-err { color: #888; padding: 6px 0; }
+      .pl-err { color: #c0392b; }
+      .pl-leg { display: flex; align-items: center; gap: 8px; }
+      .pl-leg-txt { font-size: 13px; line-height: 1.3; }
+      .pl-sub { color: #777; font-size: 12px; }
+      .pl-arrow { color: #bbb; margin: 2px 0 2px 11px; font-size: 12px; }
+      .pl-walk {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 26px; height: 26px; flex: none; font-size: 16px;
+      }
+      .pl-bullet {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 26px; height: 26px; border-radius: 50%; font-weight: 700;
+        font-size: 13px; flex: none;
+      }
+      .pl-bullet.exp { border-radius: 4px; transform: rotate(45deg); }
+      .pl-bullet.exp span { transform: rotate(-45deg); }
+
       /* Line-status strip (top center) */
       #status-strip {
         position: absolute; top: 10px; left: 50%; transform: translateX(-50%);

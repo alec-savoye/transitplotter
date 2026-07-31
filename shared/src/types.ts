@@ -95,6 +95,40 @@ export interface RouteStatus {
   label: string;
 }
 
+/** One leg of a planned journey (a ride on a single route, or a walk). */
+export interface ItineraryLeg {
+  /** "ride" | "walk". */
+  kind: "ride" | "walk";
+  /** Route id for ride legs. */
+  route?: string;
+  /** Route color for ride legs. */
+  color?: string;
+  /** Boarding station id + name (ride) or origin (walk). */
+  fromId: string;
+  fromName: string;
+  /** Alighting station id + name (ride) or destination (walk). */
+  toId: string;
+  toName: string;
+  /** Ordered station ids traversed (ride legs), for map highlighting. */
+  stops: string[];
+  /** Number of intermediate stops passed (ride legs). */
+  numStops: number;
+  /** Estimated duration in seconds. */
+  seconds: number;
+}
+
+/** A full planned journey from origin to destination. */
+export interface Itinerary {
+  /** Total estimated duration in seconds (incl. transfer penalties). */
+  seconds: number;
+  /** Number of transfers (boardings - 1). */
+  transfers: number;
+  legs: ItineraryLeg[];
+  /** Origin/destination as resolved (echoed back for the UI). */
+  origin: { name: string; lat: number; lon: number };
+  destination: { name: string; lat: number; lon: number };
+}
+
 /** Live arrivals board for one station, split by direction. */
 export interface StationArrivals {
   /** Base station id, e.g. "635". */

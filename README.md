@@ -33,6 +33,10 @@ Everything runs in Docker; nothing is installed on the host.
   severity badge; clicking it opens a drawer of active alerts. Disrupted routes
   are **dimmed and dashed** on the map, and relevant alerts appear in the
   station panel.
+- **Trip planner**: enter a start and destination (address or `lat,lon`); the
+  backend geocodes both, runs a schedule-derived journey search, and returns an
+  itinerary (route bullets, transfers, per-leg stop counts and times) that is
+  drawn on the map.
 - **Line legend** and an MTA data-source **disclaimer** footer.
 
 ---
@@ -156,7 +160,12 @@ location automatically, so `http://<LAN-IP>:5173` just works.
 | `/station/<stopId>/arrivals`  | live arrivals board for a station (see below)     |
 | `/alerts`                     | all active subway service alerts (`ServiceAlert[]`) |
 | `/status`                     | per-route rolled-up status (`RouteStatus[]`)      |
+| `/plan?from=..&to=..`         | plan a journey between two places (`Itinerary`)   |
 | WebSocket `/`                 | pushes `{ t, trains: [...] }` once per second     |
+
+`from`/`to` may be free-text addresses (geocoded, biased to NYC) or a literal
+`lat,lon` pair. The response is an `Itinerary` with ride legs (route, boarding
+and alighting station, stop count, estimated minutes) and a transfer count.
 
 **Train snapshot** (`TrainSnapshot`, over WebSocket) includes: `id`, route `r`,
 `lng`/`lat`, bearing `brg`, status `s` (`moving` \| `stopped` \| `stalled`), and
@@ -191,8 +200,14 @@ location automatically, so `http://<LAN-IP>:5173` just works.
 3. **Build legs:** for each train, find the segment it's on (previous stop ->
    next stop) and look up both stops' distances along the canonical line.
 4. **Tick (1s):** `progress = (now - departTs) / (arriveTs - departTs)`, then
-   find the point at that fraction along the shape. Stalled trains (feed
-   timestamp >90s stale) are frozen. Broadcast all positions over WebSocket.
+   find the point at that fraction **along the shape polyline** (not a straight
+   line between stations), so trains follow the real curved track. Stalled
+   trains (feed timestamp >90s stale) are frozen. Broadcast over WebSocket.
+
+   Note: shape ids encode route + direction with a variable number of dots
+   (`5..N08R`, `GS.N01R`, `SI..S03R`); the parser accepts all forms. Routes with
+   no shapes of their own (e.g. **W**) borrow a parallel line's geometry (W→N)
+   so they still follow the track instead of drawing straight segments.
 5. **Browser:** tweens each train between the 1s snapshots with
    `requestAnimationFrame` for smooth motion.
 
@@ -213,11 +228,28 @@ and caches them in the same `FeedStore`. `GET /alerts` returns them; `GET
 strip. `/station/<id>/arrivals` also includes the alerts relevant to that
 station (by station id or serving route).
 
+### Trip planning
+
+At boot the server builds a **routing graph** from the static schedule:
+
+- **Ride edges** between consecutive stops on a route, weighted by the *median*
+  in-vehicle time across all trips (from `stop_times` arrival/departure).
+- **Transfer edges** between distinct base stations within ~250 m walking
+  distance (different services use different stop ids for the same complex, so
+  these keep the graph connected).
+
+`GET /plan` geocodes the origin/destination (configurable Nominatim), snaps each
+to the nearest few stations with a walking access/egress cost, and runs
+**Dijkstra over `(station, routeAboard)` states** with a per-transfer penalty so
+staying on one line is preferred. This is a "typical time" planner (not
+timetable-exact), which suits a live-map trip helper. The graph is derived from
+the cached static data — no extra persistence.
+
 ## Source layout
 
 ```
 shared/src/types.ts        wire contract (TrainSnapshot, StationArrivals,
-                             ServiceAlert, RouteStatus, ...)
+                             ServiceAlert, RouteStatus, Itinerary, ...)
 scripts/build-static.ts    download GTFS static ZIP -> cached SQLite
 server/src/
   feeds.ts                 realtime + alerts feed URLs + poll intervals
@@ -227,6 +259,9 @@ server/src/
   state.ts                 realtime + static -> active "legs" per train
   interpolate.ts           legs -> positions along track each tick
   arrivals.ts              build per-station arrivals board (+ station alerts)
+  routing/graph.ts         build ride + transfer graph from the schedule
+  routing/plan.ts          Dijkstra journey search -> itinerary legs
+  routing/geocode.ts       address -> coordinate (configurable Nominatim)
   tick.ts                  poll (20s) + alerts (60s) + broadcast (1s) loops
   ws.ts                    WebSocket broadcaster + HTTP endpoints
   static/load.ts           load SQLite; build canonical route/dir lines
@@ -239,6 +274,7 @@ web/src/
   ui.ts                    line legend + click-a-train popup
   station.ts               click-a-station arrivals panel (+ alerts)
   alerts.ts                line-status strip + alerts drawer
+  planner.ts               trip planner UI + itinerary map highlight
   config.ts                backend host resolution (LAN-aware)
 ```
 
@@ -249,5 +285,14 @@ web/src/
 - **Phase 2 (done):** live per-station arrivals board with express clarity.
 - **Phase 3 (done):** service alerts / line-status strip, disrupted-route
   dimming + dashing, station-level alerts.
-- **Phase 4 (planned):** address-to-address trip planner (RAPTOR/CSA routing
-  over static GTFS + a self-hosted geocoder).
+- **Phase 4 (done):** address-to-address trip planner (schedule-derived routing
+  graph + Dijkstra with transfer penalty + configurable geocoder).
+
+### Configuration
+
+| Env var            | Default                          | Purpose                          |
+| ------------------ | -------------------------------- | -------------------------------- |
+| `PORT`             | `8080`                           | server listen port (container)   |
+| `GTFS_CACHE_DIR`   | `<repo>/.cache`                  | where the static SQLite lives    |
+| `GTFS_STATIC_URL`  | MTA supplemented ZIP             | static GTFS source               |
+| `GEOCODER_URL`     | `https://nominatim.openstreetmap.org` | geocoder for the trip planner (set to a self-hosted Nominatim to avoid public rate limits) |

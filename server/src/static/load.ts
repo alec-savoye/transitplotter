@@ -44,6 +44,14 @@ export interface StopStatic {
   lon: number;
 }
 
+/** A stop within a trip, with schedule times (seconds since service midnight). */
+export interface TripStopTime {
+  stopId: string;
+  shapeDist: number | null;
+  arr: number | null;
+  dep: number | null;
+}
+
 /** Canonical ordered stops for a route+direction, projected onto a shape. */
 export interface RouteDirLine {
   key: string; // "<route>|<N|S>"
@@ -59,17 +67,20 @@ export interface StaticData {
   stops: Map<string, StopStatic>;
   trips: Map<string, TripStatic>;
   shapes: Map<string, Shape>;
-  /** trip_id -> ordered list of { stopId, shapeDist(meters|null) }. */
-  tripStops: Map<string, { stopId: string; shapeDist: number | null }[]>;
+  /** trip_id -> ordered stop times. */
+  tripStops: Map<string, TripStopTime[]>;
   /** "<routeId>|<N|S>" -> candidate shapes (RT trip ids don't name a shape). */
   shapesByRouteDir: Map<string, Shape[]>;
   /** "<routeId>|<N|S>" -> canonical line used for interpolation. */
   lineByRouteDir: Map<string, RouteDirLine>;
 }
 
-/** Shape ids encode route + direction, e.g. "5..N08R" -> route "5", dir "N". */
+/**
+ * Shape ids encode route + direction with one or more dots before the
+ * direction letter, e.g. "5..N08R" -> 5/N, "GS.N01R" -> GS/N, "SI..S03R" -> SI/S.
+ */
 function shapeRouteDir(shapeId: string): { route: string; dir: string } | null {
-  const m = /^([^.]+)\.\.([NS])/.exec(shapeId);
+  const m = /^(.+?)\.+([NS])/.exec(shapeId);
   if (!m) return null;
   return { route: m[1], dir: m[2] };
 }
@@ -158,10 +169,12 @@ export function loadStatic(): StaticData {
     cur.length = dist;
   }
 
-  // stop_times -> tripStops
-  const tripStops = new Map<string, { stopId: string; shapeDist: number | null }[]>();
+  // stop_times -> tripStops (now including scheduled arr/dep seconds-of-day)
+  const tripStops = new Map<string, TripStopTime[]>();
   const stRows = db
-    .prepare(`SELECT trip_id, stop_id, seq, shape_dist FROM stop_times ORDER BY trip_id, seq`)
+    .prepare(
+      `SELECT trip_id, stop_id, seq, shape_dist, arr, dep FROM stop_times ORDER BY trip_id, seq`
+    )
     .all() as any[];
   for (const row of stRows) {
     let arr = tripStops.get(row.trip_id);
@@ -169,7 +182,12 @@ export function loadStatic(): StaticData {
       arr = [];
       tripStops.set(row.trip_id, arr);
     }
-    arr.push({ stopId: row.stop_id, shapeDist: row.shape_dist });
+    arr.push({
+      stopId: row.stop_id,
+      shapeDist: row.shape_dist,
+      arr: row.arr ?? null,
+      dep: row.dep ?? null,
+    });
   }
 
   db.close();

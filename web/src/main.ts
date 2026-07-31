@@ -5,6 +5,7 @@ import { TrainLayer } from "./trains.js";
 import { buildLegend, attachTrainPopup } from "./ui.js";
 import { StationPanel } from "./station.js";
 import { AlertsUI } from "./alerts.js";
+import { TripPlanner } from "./planner.js";
 import { SERVER_HTTP, SERVER_WS } from "./config.js";
 
 const hud = document.getElementById("hud")!;
@@ -37,6 +38,9 @@ async function main() {
     setDisruptedRoutes(map, allRouteIds, disrupted);
   });
   alertsUI.start();
+
+  // Trip planner (address-to-address).
+  new TripPlanner(map, SERVER_HTTP);
 
   const trainLayer = new TrainLayer(map, routes);
   connect(trainLayer);

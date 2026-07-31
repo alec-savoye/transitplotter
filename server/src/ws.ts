@@ -8,6 +8,9 @@ import type { StaticData } from "./static/load.js";
 import type { FeedStore } from "./feedstore.js";
 import { buildStationArrivals } from "./arrivals.js";
 import { rollUpStatus } from "./alerts.js";
+import type { RoutingGraph } from "./routing/graph.js";
+import { planJourney } from "./routing/plan.js";
+import { geocode } from "./routing/geocode.js";
 
 export class Broadcaster {
   private wss: WebSocketServer;
@@ -20,12 +23,19 @@ export class Broadcaster {
 
   constructor(
     private stat: StaticData,
-    private feedStore: FeedStore
+    private feedStore: FeedStore,
+    private graph: RoutingGraph
   ) {
     this.routesGeoJson = JSON.stringify(buildRoutesGeoJson(stat));
     this.stationsGeoJson = JSON.stringify(buildStationsGeoJson(stat));
 
-    this.http = createServer((req, res) => this.handleHttp(req, res));
+    this.http = createServer((req, res) => {
+      this.handleHttp(req, res).catch((e) => {
+        console.error("http error", e);
+        if (!res.headersSent) res.statusCode = 500;
+        res.end(JSON.stringify({ error: "internal error" }));
+      });
+    });
     this.wss = new WebSocketServer({ server: this.http });
 
     this.wss.on("connection", (ws) => {
@@ -34,8 +44,14 @@ export class Broadcaster {
     });
   }
 
-  private handleHttp(req: IncomingMessage, res: ServerResponse) {
+  private async handleHttp(req: IncomingMessage, res: ServerResponse) {
     res.setHeader("Access-Control-Allow-Origin", "*");
+
+    // Trip planner: /plan?from=<addr|lat,lon>&to=<addr|lat,lon>
+    if (req.url && req.url.startsWith("/plan")) {
+      await this.handlePlan(req, res);
+      return;
+    }
     if (req.url === "/routes") {
       const routes: RouteMeta[] = [...this.stat.routes.values()];
       res.setHeader("Content-Type", "application/json");
@@ -92,12 +108,41 @@ export class Broadcaster {
       res.end(
         "TransitPlotter backend (API only).\n" +
           "The map UI is served separately on port 5173.\n\n" +
-          "Endpoints: /health /routes /geo/routes /geo/stations  (+ WebSocket)\n"
+          "Endpoints: /health /routes /geo/routes /geo/stations /alerts /status\n" +
+          "           /station/<id>/arrivals  /plan?from=..&to=..  (+ WebSocket)\n"
       );
       return;
     }
     res.statusCode = 404;
     res.end("not found");
+  }
+
+  /** Handle GET /plan?from=..&to=.. : geocode both ends, then plan a journey. */
+  private async handlePlan(req: IncomingMessage, res: ServerResponse) {
+    res.setHeader("Content-Type", "application/json");
+    const url = new URL(req.url!, "http://localhost");
+    const from = url.searchParams.get("from")?.trim();
+    const to = url.searchParams.get("to")?.trim();
+    if (!from || !to) {
+      res.statusCode = 400;
+      res.end(JSON.stringify({ error: "missing from/to" }));
+      return;
+    }
+
+    const [o, d] = await Promise.all([geocode(from), geocode(to)]);
+    if (!o || !d) {
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: "could not geocode origin or destination" }));
+      return;
+    }
+
+    const itinerary = planJourney(this.stat, this.graph, o, d);
+    if (!itinerary) {
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: "no route found" }));
+      return;
+    }
+    res.end(JSON.stringify(itinerary));
   }
 
   broadcast(msg: ServerMessage) {

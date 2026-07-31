@@ -96,7 +96,9 @@ async function main() {
       trip_id TEXT,
       stop_id TEXT,
       seq INTEGER,
-      shape_dist REAL
+      shape_dist REAL,
+      arr INTEGER,   -- arrival, seconds since service-day midnight
+      dep INTEGER    -- departure, seconds since service-day midnight
     );
     CREATE INDEX idx_stop_times_trip ON stop_times(trip_id, seq);
   `);
@@ -174,9 +176,16 @@ async function main() {
   console.log(`  shape points: ${shapes.length}`);
 
   // --- stop_times -----------------------------------------------------------
+  // GTFS times can exceed 24:00:00 (service past midnight). Parse to seconds.
+  const hms = (t: string | undefined): number | null => {
+    if (!t) return null;
+    const m = /^(\d+):(\d{2}):(\d{2})$/.exec(t.trim());
+    if (!m) return null;
+    return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+  };
   const stopTimes = csv(zip, "stop_times.txt");
   const insST = db.prepare(
-    `INSERT INTO stop_times VALUES (@trip_id,@stop_id,@seq,@shape_dist)`
+    `INSERT INTO stop_times VALUES (@trip_id,@stop_id,@seq,@shape_dist,@arr,@dep)`
   );
   tx(() => {
     for (const st of stopTimes) {
@@ -185,6 +194,8 @@ async function main() {
         stop_id: st.stop_id,
         seq: Number(st.stop_sequence),
         shape_dist: st.shape_dist_traveled ? Number(st.shape_dist_traveled) : null,
+        arr: hms(st.arrival_time),
+        dep: hms(st.departure_time),
       });
     }
   });
