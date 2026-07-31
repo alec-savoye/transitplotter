@@ -50,6 +50,15 @@ export class Broadcaster {
       res.end("ok");
       return;
     }
+    if (req.url === "/" || req.url === "") {
+      res.setHeader("Content-Type", "text/plain");
+      res.end(
+        "TransitPlotter backend (API only).\n" +
+          "The map UI is served separately on port 5173.\n\n" +
+          "Endpoints: /health /routes /geo/routes /geo/stations  (+ WebSocket)\n"
+      );
+      return;
+    }
     res.statusCode = 404;
     res.end("not found");
   }
@@ -91,18 +100,41 @@ function buildRoutesGeoJson(stat: StaticData): GeoJSON.FeatureCollection {
   return { type: "FeatureCollection", features };
 }
 
-/** One point per parent station (dedupe N/S platforms). */
+/** One point per parent station (dedupe N/S platforms), colored by line. */
 function buildStationsGeoJson(stat: StaticData): GeoJSON.FeatureCollection {
+  const baseStop = (id: string) => (/[NS]$/.test(id) ? id.slice(0, -1) : id);
+
+  // Which routes serve each base station? Derive from the canonical lines.
+  const routesByStation = new Map<string, Set<string>>();
+  for (const line of stat.lineByRouteDir.values()) {
+    const routeId = line.key.split("|")[0];
+    for (const stopId of line.stopDist.keys()) {
+      const base = baseStop(stopId);
+      let set = routesByStation.get(base);
+      if (!set) routesByStation.set(base, (set = new Set()));
+      set.add(routeId);
+    }
+  }
+
   const features: GeoJSON.Feature[] = [];
   const seen = new Set<string>();
   for (const s of stat.stops.values()) {
-    // Collapse directional platform ids (e.g. "101N"/"101S") to base "101".
-    const base = /[NS]$/.test(s.id) ? s.id.slice(0, -1) : s.id;
+    const base = baseStop(s.id);
     if (seen.has(base)) continue;
     seen.add(base);
+
+    const routeIds = [...(routesByStation.get(base) ?? [])].sort();
+    // Pick the first serving route's color as the pin color.
+    const primary = routeIds[0];
+    const color = (primary && stat.routes.get(primary)?.color) || "#0b60d6";
+
     features.push({
       type: "Feature",
-      properties: { name: s.name },
+      properties: {
+        name: s.name,
+        routes: routeIds.join(""), // e.g. "456"
+        color,
+      },
       geometry: { type: "Point", coordinates: [s.lon, s.lat] },
     });
   }
