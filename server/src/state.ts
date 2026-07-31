@@ -27,6 +27,9 @@ export interface ActiveLeg {
 
   fromLatLon: [number, number] | null; // [lon, lat] fallback
   toLatLon: [number, number] | null;
+
+  nextStopName: string | null; // human name of the next stop
+  destName: string | null; // human name of the trip's final stop
 }
 
 /** Direction from a GTFS-realtime stop id suffix, e.g. "125N" -> "N". */
@@ -103,6 +106,11 @@ export function buildActiveLegs(feed: FeedTrip[], stat: StaticData): ActiveLeg[]
       }
     }
 
+    // Human-readable next stop + trip destination (last listed stop).
+    const nextStopName = toStop?.name ?? null;
+    const lastStopId = su[su.length - 1]?.stopId;
+    const destName = lastStopId ? stat.stops.get(lastStopId)?.name ?? null : null;
+
     legs.push({
       tripId: t.tripId,
       routeId: t.routeId,
@@ -116,6 +124,8 @@ export function buildActiveLegs(feed: FeedTrip[], stat: StaticData): ActiveLeg[]
       toDist,
       fromLatLon,
       toLatLon,
+      nextStopName,
+      destName,
     });
   }
 

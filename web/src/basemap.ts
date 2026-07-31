@@ -3,6 +3,8 @@
 // top from the server's static GeoJSON.
 
 import maplibregl from "maplibre-gl";
+import type { RouteMeta } from "@transitplotter/shared";
+import { registerAllBullets, BULLET_PREFIX } from "./bullets.js";
 
 // CARTO "Voyager" raster basemap — real streets/land/water/parks in a light,
 // colorful palette. No API key required. (Swap "voyager" for "dark_all" for a
@@ -37,20 +39,30 @@ export function createMap(container: string): maplibregl.Map {
     },
     center: [-73.98, 40.75], // Midtown Manhattan
     zoom: 11,
+    pitch: 45, // tilted 3D-style view
+    bearing: -17,
+    maxPitch: 75,
   });
 
-  map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+  // Compass enabled so users can reset/rotate the tilted view.
+  map.addControl(new maplibregl.NavigationControl({ showCompass: true, visualizePitch: true }), "top-right");
   return map;
 }
 
 /** Add sources/layers for routes, stations, and trains, loading static geo. */
-export async function addLayers(map: maplibregl.Map, serverHttp: string) {
+export async function addLayers(
+  map: maplibregl.Map,
+  serverHttp: string,
+  routes: RouteMeta[]
+) {
   const [routesGeo, stationsGeo] = await Promise.all([
     fetch(`${serverHttp}/geo/routes`).then((r) => r.json()).catch(() => emptyFC()),
     fetch(`${serverHttp}/geo/stations`).then((r) => r.json()).catch(() => emptyFC()),
   ]);
 
-  map.addSource("routes", { type: "geojson", data: routesGeo });
+  // promoteId lets us drive per-route feature-state by route id. Multiple
+  // segments share the same route id, so setting state once dims them all.
+  map.addSource("routes", { type: "geojson", data: routesGeo, promoteId: "route" });
   map.addLayer({
     id: "routes",
     type: "line",
@@ -59,7 +71,22 @@ export async function addLayers(map: maplibregl.Map, serverHttp: string) {
     paint: {
       "line-color": ["get", "color"],
       "line-width": 3,
-      "line-opacity": 0.9,
+      // Disrupted routes (feature-state.disrupted) are dimmed.
+      "line-opacity": ["case", ["boolean", ["feature-state", "disrupted"], false], 0.35, 0.9],
+    },
+  });
+
+  // Dashed overlay drawn only for disrupted routes, to signal service issues.
+  map.addLayer({
+    id: "routes-disrupted",
+    type: "line",
+    source: "routes",
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: {
+      "line-color": ["get", "color"],
+      "line-width": 3,
+      "line-dasharray": [1.5, 1.5],
+      "line-opacity": ["case", ["boolean", ["feature-state", "disrupted"], false], 0.95, 0],
     },
   });
 
@@ -118,18 +145,58 @@ export async function addLayers(map: maplibregl.Map, serverHttp: string) {
     },
   });
 
+  // Trains rendered as MTA route bullets (colored disc/diamond w/ label).
+  registerAllBullets(map, routes);
   map.addSource("trains", { type: "geojson", data: emptyFC() });
+
+  // Slowly flashing red ring around stalled trains. The radius/opacity are
+  // animated each frame (see TrainLayer) to create a gentle pulse.
   map.addLayer({
-    id: "trains",
+    id: "trains-halo",
     type: "circle",
     source: "trains",
+    filter: ["==", ["get", "status"], "stalled"],
     paint: {
-      "circle-radius": 5,
-      "circle-color": ["get", "color"],
-      "circle-stroke-color": "#fff",
-      "circle-stroke-width": 1.5,
+      "circle-radius": 12,
+      "circle-color": "rgba(0,0,0,0)", // ring only, no fill
+      "circle-stroke-color": "#ff3b30",
+      "circle-stroke-width": 2.5,
+      "circle-stroke-opacity": 0.8,
     },
   });
+
+  map.addLayer({
+    id: "trains",
+    type: "symbol",
+    source: "trains",
+    layout: {
+      // route id -> "bullet-<route>", falling back to "bullet-?"
+      "icon-image": [
+        "coalesce",
+        ["image", ["concat", BULLET_PREFIX, ["get", "route"]]],
+        ["image", `${BULLET_PREFIX}?`],
+      ],
+      "icon-allow-overlap": true,
+      "icon-size": ["interpolate", ["linear"], ["zoom"], 10, 0.5, 14, 0.9],
+    },
+  });
+}
+
+/**
+ * Mark the given route ids as disrupted (dimmed + dashed on the map). Any route
+ * not in the set is cleared. Uses feature-state keyed by the promoted route id.
+ */
+export function setDisruptedRoutes(
+  map: maplibregl.Map,
+  allRouteIds: string[],
+  disrupted: Set<string>
+) {
+  for (const id of allRouteIds) {
+    map.setFeatureState(
+      { source: "routes", id },
+      { disrupted: disrupted.has(id) }
+    );
+  }
 }
 
 const DEFAULT_PIN_COLOR = "#0b60d6"; // MTA-ish blue fallback

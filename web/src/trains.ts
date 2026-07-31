@@ -12,6 +12,9 @@ interface TweenTrain {
   startMs: number;
   r: string;
   s: string;
+  ns?: string;
+  eta?: number;
+  dest?: string;
 }
 
 // Duration to tween between snapshots. Matches server tick (~1s); a little
@@ -40,6 +43,9 @@ export class TrainLayer {
         startMs: now,
         r: t.r,
         s: t.s,
+        ns: t.ns,
+        eta: t.eta,
+        dest: t.dest,
       });
     }
     // drop trains no longer reported
@@ -58,6 +64,14 @@ export class TrainLayer {
 
   private frame() {
     const now = performance.now();
+
+    // Slow pulse for the stalled-train ring (~2.5s period).
+    if (this.map.getLayer("trains-halo")) {
+      const phase = (Math.sin((now / 1250) * Math.PI) + 1) / 2; // 0..1
+      this.map.setPaintProperty("trains-halo", "circle-stroke-opacity", 0.25 + 0.6 * phase);
+      this.map.setPaintProperty("trains-halo", "circle-radius", 11 + 4 * phase);
+    }
+
     const src = this.map.getSource("trains") as maplibregl.GeoJSONSource | undefined;
     if (src) {
       const fc = emptyFC();
@@ -68,8 +82,12 @@ export class TrainLayer {
           geometry: { type: "Point", coordinates: [lng, lat] },
           properties: {
             id,
+            route: t.r,
             color: this.colors.get(t.r) ?? "#cccccc",
             status: t.s,
+            ns: t.ns ?? "",
+            eta: t.eta ?? 0,
+            dest: t.dest ?? "",
           },
         });
       }

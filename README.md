@@ -6,12 +6,34 @@ streams positions over WebSocket to a browser that renders them moving between
 stations on a stylized subway map.
 
 - **Backend** (`server/`): Node.js/TypeScript. Polls feeds, computes positions,
-  broadcasts over WebSocket, serves static map geometry over HTTP.
-- **Frontend** (`web/`): Vite + MapLibre GL. A "dumb" renderer — it just draws
-  the positions the backend sends and tweens between them.
+  broadcasts over WebSocket, serves static map geometry and a live per-station
+  arrivals API over HTTP.
+- **Frontend** (`web/`): Vite + MapLibre GL. A "dumb" renderer — it draws the
+  positions the backend sends and tweens between them, and shows contextual UI
+  (train popups, station arrivals board).
 - **Shared** (`shared/`): the tiny wire contract shared by both.
 
 Everything runs in Docker; nothing is installed on the host.
+
+## Features
+
+- **Live train movement** on a real geographic basemap (CARTO Voyager tiles),
+  ~700 trains interpolated along real track geometry.
+- **3D tilted view** with a compass control (drag / right-click to rotate).
+- **Route-bullet markers**: trains are MTA-style colored bullets showing the
+  route letter/number; **express** services render as diamonds.
+- **Click a train** → popup with route bullet, destination, next stop + ETA,
+  and reliability status.
+- **Stalled-train flag**: trains the MTA feed reports as not moving (movement
+  timestamp > 90 s stale) get a **slowly flashing red ring**.
+- **Click a station** → live **arrivals board** with per-direction countdown
+  clocks, route bullets, destinations, and an express marker.
+- **Station pins** colored by line, with zoom-dependent name labels.
+- **Service alerts**: a top **line-status strip** shows each service with a
+  severity badge; clicking it opens a drawer of active alerts. Disrupted routes
+  are **dimmed and dashed** on the map, and relevant alerts appear in the
+  station panel.
+- **Line legend** and an MTA data-source **disclaimer** footer.
 
 ---
 
@@ -58,7 +80,25 @@ get its upcoming stops with *predicted arrival/departure times*. So the backend
 geometry between its previous and next stop based on those predicted times.
 (Reference: MTA GTFS-realtime docs, <https://www.mta.info/document/134521>.)
 
-### 2. Static feed — *the map itself* (downloaded once, cached)
+### 2. Service Alerts feed — *what's disrupted* (polled every 60s)
+
+Defined in [`server/src/feeds.ts`](server/src/feeds.ts), parsed in
+[`server/src/alerts.ts`](server/src/alerts.ts).
+
+```
+https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fall-alerts
+```
+
+Also GTFS-realtime protobuf. It's an all-agency feed; we filter to subway
+(`informedEntity.agencyId === "MTASBWY"`) and keep only currently-active alerts.
+
+**Quirk:** the subway alerts feed sets every alert's `effect` to `UNKNOWN` and
+puts the real category in an undecoded Mercury extension, so severity is derived
+from the **headline text** (e.g. "suspended" → severe, "delays" → delays,
+"planned"/"weekend" → planned work). Severity rolls up per route for the
+line-status strip.
+
+### 3. Static feed — *the map itself* (downloaded once, cached)
 
 Defined in [`scripts/build-static.ts`](scripts/build-static.ts).
 
@@ -75,18 +115,13 @@ The URL can be overridden with the `GTFS_STATIC_URL` env var.
 
 ---
 
-## Caching (off the boot drive)
+## Caching
 
-Large cached assets must **not** live on the boot drive. The static GTFS SQLite
-DB is stored under:
-
-```
-/srv/active-raid/LIBRARIES/247/tmp-trainsplotter/gtfs_static.sqlite
-```
-
-This directory is bind-mounted into the containers at `/cache` (see
-`docker-compose.yml`, `GTFS_CACHE_HOST` / `GTFS_CACHE_DIR`). The DB is **not**
-committed to the repo. Override the host path with `GTFS_CACHE_HOST`.
+Large cached assets are kept out of the repo. The static GTFS SQLite DB is
+written to a host directory that is bind-mounted into the containers at
+`/cache` (see `docker-compose.yml`, `GTFS_CACHE_HOST` / `GTFS_CACHE_DIR`). Set
+`GTFS_CACHE_HOST` to the host path where you want the cache stored. The DB is
+**not** committed to the repo.
 
 ---
 
@@ -104,21 +139,45 @@ docker compose up server web
 ```
 
 - **Map UI:**  http://localhost:5173  (or `http://<LAN-IP>:5173`)
-- **Backend API:** http://localhost:8090  (host 8080 is used by pihole, so the
-  host port is 8090 mapped to the container's 8080)
+- **Backend API:** http://localhost:8090  (host port 8090 → container port 8080;
+  change the mapping in `docker-compose.yml` if 8090 is taken)
 
 For LAN testing, the web app derives the backend host from the browser's
 location automatically, so `http://<LAN-IP>:5173` just works.
 
 ### Backend HTTP endpoints
 
-| Path             | Description                                  |
-| ---------------- | -------------------------------------------- |
-| `/health`        | liveness check                               |
-| `/routes`        | route metadata (id, color, name) as JSON     |
-| `/geo/routes`    | route line geometry as GeoJSON               |
-| `/geo/stations`  | station points as GeoJSON                    |
-| WebSocket `/`    | pushes `{ t, trains: [...] }` once per second |
+| Path                          | Description                                       |
+| ----------------------------- | ------------------------------------------------- |
+| `/health`                     | liveness check                                    |
+| `/routes`                     | route metadata (id, color, name) as JSON          |
+| `/geo/routes`                 | route line geometry as GeoJSON                    |
+| `/geo/stations`               | station points as GeoJSON (id, name, routes, color) |
+| `/station/<stopId>/arrivals`  | live arrivals board for a station (see below)     |
+| `/alerts`                     | all active subway service alerts (`ServiceAlert[]`) |
+| `/status`                     | per-route rolled-up status (`RouteStatus[]`)      |
+| WebSocket `/`                 | pushes `{ t, trains: [...] }` once per second     |
+
+**Train snapshot** (`TrainSnapshot`, over WebSocket) includes: `id`, route `r`,
+`lng`/`lat`, bearing `brg`, status `s` (`moving` \| `stopped` \| `stalled`), and
+— when known — next stop `ns`, arrival `eta` (epoch s), and destination `dest`.
+
+**Arrivals board** (`GET /station/<stopId>/arrivals`) returns:
+
+```jsonc
+{
+  "id": "127",
+  "name": "Times Sq-42 St",
+  "north": [
+    { "route": "1", "color": "#D82233", "express": false,
+      "eta": 1785517759, "inSec": 104, "dest": "Van Cortlandt Park-242 St" }
+  ],
+  "south": [ /* ... */ ]
+}
+```
+
+`<stopId>` is the base station id (directional `N`/`S` suffix optional); the
+`id` field in `/geo/stations` features is exactly what to pass here.
 
 ---
 
@@ -136,3 +195,59 @@ location automatically, so `http://<LAN-IP>:5173` just works.
    timestamp >90s stale) are frozen. Broadcast all positions over WebSocket.
 5. **Browser:** tweens each train between the 1s snapshots with
    `requestAnimationFrame` for smooth motion.
+
+### Live arrivals
+
+The poll loop also stores the most recent parsed feed in an in-memory
+`FeedStore`. `GET /station/<id>/arrivals` scans that feed for stop-time
+predictions at the requested station, groups them by direction (`N`/`S`),
+computes seconds-to-arrival, and returns the soonest few per direction. This is
+ephemeral realtime data — **not** persisted (consistent with the "database only
+for static data" rule).
+
+### Service alerts
+
+A separate 60s loop fetches the alerts feed, filters to active subway alerts,
+and caches them in the same `FeedStore`. `GET /alerts` returns them; `GET
+/status` rolls them up into a per-route worst-severity list for the line-status
+strip. `/station/<id>/arrivals` also includes the alerts relevant to that
+station (by station id or serving route).
+
+## Source layout
+
+```
+shared/src/types.ts        wire contract (TrainSnapshot, StationArrivals,
+                             ServiceAlert, RouteStatus, ...)
+scripts/build-static.ts    download GTFS static ZIP -> cached SQLite
+server/src/
+  feeds.ts                 realtime + alerts feed URLs + poll intervals
+  parse.ts                 fetch + decode GTFS-realtime protobuf (positions)
+  alerts.ts                fetch + classify service alerts; per-route rollup
+  feedstore.ts             holds latest parsed feed + alerts for lookups
+  state.ts                 realtime + static -> active "legs" per train
+  interpolate.ts           legs -> positions along track each tick
+  arrivals.ts              build per-station arrivals board (+ station alerts)
+  tick.ts                  poll (20s) + alerts (60s) + broadcast (1s) loops
+  ws.ts                    WebSocket broadcaster + HTTP endpoints
+  static/load.ts           load SQLite; build canonical route/dir lines
+  static/geometry.ts       project/interpolate points along shapes
+web/src/
+  main.ts                  bootstrap: map, layers, legend, popups, panels
+  basemap.ts               map style, route/station/train layers, disruption
+  bullets.ts               render MTA route-bullet icons to canvas
+  trains.ts                consume WS snapshots + rAF tween + stalled pulse
+  ui.ts                    line legend + click-a-train popup
+  station.ts               click-a-station arrivals panel (+ alerts)
+  alerts.ts                line-status strip + alerts drawer
+  config.ts                backend host resolution (LAN-aware)
+```
+
+## Roadmap
+
+- **Phase 1 (done):** route-bullet trains, click-a-train info, 3D tilt, legend,
+  stalled-train flag (slow-flashing red ring).
+- **Phase 2 (done):** live per-station arrivals board with express clarity.
+- **Phase 3 (done):** service alerts / line-status strip, disrupted-route
+  dimming + dashing, station-level alerts.
+- **Phase 4 (planned):** address-to-address trip planner (RAPTOR/CSA routing
+  over static GTFS + a self-hosted geocoder).

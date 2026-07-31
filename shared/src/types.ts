@@ -21,6 +21,12 @@ export interface TrainSnapshot {
   brg: number;
   /** Movement state. */
   s: TrainStatus;
+  /** Next stop name (destination of the current leg), if known. */
+  ns?: string;
+  /** Predicted arrival at the next stop (epoch seconds), if known. */
+  eta?: number;
+  /** Final destination stop name for the trip, if known. */
+  dest?: string;
 }
 
 /** Message pushed from server to clients each tick. */
@@ -38,4 +44,67 @@ export interface RouteMeta {
   color: string;
   /** Long name, e.g. "Broadway - 7 Avenue Local". */
   name: string;
+}
+
+/** A single upcoming train arrival at a station (one direction). */
+export interface Arrival {
+  /** Route id, e.g. "6", "6X". */
+  route: string;
+  /** Official MTA hex color for the route. */
+  color: string;
+  /** Whether this is express service (route id ends in X). */
+  express: boolean;
+  /** Predicted arrival time (epoch seconds). */
+  eta: number;
+  /** Seconds until arrival (server-computed at request time). */
+  inSec: number;
+  /** Trip's final destination stop name, if known. */
+  dest: string;
+}
+
+/** A service alert affecting one or more routes/stations. */
+export interface ServiceAlert {
+  /** Stable id for de-duping on the client. */
+  id: string;
+  /** Route ids this alert affects, e.g. ["B","D"]. */
+  routes: string[];
+  /** Base station ids this alert affects (directional suffix stripped). */
+  stops: string[];
+  /** Short headline text. */
+  header: string;
+  /** Longer description, if provided. */
+  description: string;
+  /**
+   * Coarse severity derived from the alert effect:
+   *   3 = severe (suspended / no service)
+   *   2 = delays / reduced service
+   *   1 = info / planned / minor
+   */
+  severity: 1 | 2 | 3;
+  /** Short human label, e.g. "Delays", "Suspended", "Planned Work". */
+  effect: string;
+}
+
+/** Per-route rolled-up status for the line-status strip. */
+export interface RouteStatus {
+  route: string;
+  color: string;
+  /** Worst severity among active alerts for this route (0 = good service). */
+  severity: 0 | 1 | 2 | 3;
+  /** Short label: "Good Service" | "Planned Work" | "Delays" | "Suspended" ... */
+  label: string;
+}
+
+/** Live arrivals board for one station, split by direction. */
+export interface StationArrivals {
+  /** Base station id, e.g. "635". */
+  id: string;
+  /** Station name. */
+  name: string;
+  /** Northbound / Uptown arrivals, soonest first. */
+  north: Arrival[];
+  /** Southbound / Downtown arrivals, soonest first. */
+  south: Arrival[];
+  /** Active service alerts touching this station or its routes. */
+  alerts?: ServiceAlert[];
 }

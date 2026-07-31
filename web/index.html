@@ -7,16 +7,164 @@
     <style>
       html, body, #map { margin: 0; height: 100%; width: 100%; }
       body { background: #1a1a1a; font-family: system-ui, sans-serif; }
+
       #hud {
         position: absolute; top: 10px; left: 10px; z-index: 10;
-        background: rgba(0,0,0,0.6); color: #fff; padding: 6px 10px;
-        border-radius: 6px; font-size: 13px;
+        background: rgba(0,0,0,0.65); color: #fff; padding: 6px 10px;
+        border-radius: 6px; font-size: 13px; font-weight: 600;
       }
+
+      /* Line legend */
+      #legend {
+        position: absolute; bottom: 28px; left: 10px; z-index: 10;
+        background: rgba(255,255,255,0.92); color: #111; padding: 8px 10px;
+        border-radius: 8px; font-size: 12px; max-width: 220px;
+        box-shadow: 0 1px 6px rgba(0,0,0,0.3);
+      }
+      #legend h4 { margin: 0 0 6px; font-size: 12px; }
+      #legend .rows { display: flex; flex-wrap: wrap; gap: 4px; }
+      .lg-bullet {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 20px; height: 20px; border-radius: 50%; color: #fff;
+        font-weight: 700; font-size: 11px;
+      }
+      .lg-bullet.exp { border-radius: 3px; transform: rotate(45deg); }
+      .lg-bullet.exp span { transform: rotate(-45deg); }
+
+      /* Train info popup */
+      .maplibregl-popup-content {
+        font-family: system-ui, sans-serif; padding: 10px 12px;
+        border-radius: 8px;
+      }
+      .tp-pop-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+      .tp-bullet {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 26px; height: 26px; border-radius: 50%; color: #fff;
+        font-weight: 700; font-size: 14px; flex: none;
+      }
+      .tp-bullet.exp { border-radius: 4px; transform: rotate(45deg); }
+      .tp-bullet.exp span { transform: rotate(-45deg); }
+      .tp-dest { font-weight: 600; font-size: 14px; }
+      .tp-row { font-size: 13px; margin-top: 2px; }
+      .tp-eta { font-weight: 700; }
+      .tp-status { font-size: 12px; margin-top: 4px; }
+      .tp-status.stalled { color: #c0392b; font-weight: 700; }
+      .tp-status.moving { color: #148f4b; }
+      .tp-status.stopped { color: #b8860b; }
+
+      /* Station arrivals panel */
+      #station-panel {
+        position: absolute; top: 0; right: 0; z-index: 20;
+        width: 320px; max-width: 85vw; height: 100%;
+        background: #fff; color: #111; box-shadow: -2px 0 12px rgba(0,0,0,0.25);
+        overflow-y: auto; font-size: 14px;
+      }
+      .st-head {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 12px 14px; background: #0b60d6; color: #fff;
+        position: sticky; top: 0; font-size: 16px;
+      }
+      .st-close { cursor: pointer; font-size: 18px; opacity: 0.9; }
+      .st-close:hover { opacity: 1; }
+      .st-dir { padding: 8px 14px; }
+      .st-dir h4 {
+        margin: 8px 0 6px; font-size: 12px; text-transform: uppercase;
+        letter-spacing: 0.05em; color: #666;
+      }
+      .st-row {
+        display: flex; align-items: center; gap: 8px; padding: 6px 0;
+        border-bottom: 1px solid #eee;
+      }
+      .st-bullet {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 26px; height: 26px; border-radius: 50%; font-weight: 700;
+        font-size: 13px; flex: none;
+      }
+      .st-bullet.exp { border-radius: 4px; transform: rotate(45deg); }
+      .st-bullet.exp span { transform: rotate(-45deg); }
+      .st-dest { flex: 1; font-size: 13px; }
+      .st-exp { color: #b8860b; font-style: normal; font-size: 11px; }
+      .st-eta { font-weight: 700; font-variant-numeric: tabular-nums; }
+      .st-empty, .st-loading { color: #888; padding: 8px 0; font-size: 13px; }
+      .st-alerts { padding: 8px 14px; background: #fff8e6; }
+      .st-alerts h4 {
+        margin: 4px 0 6px; font-size: 12px; text-transform: uppercase;
+        letter-spacing: 0.05em; color: #8a6d00;
+      }
+      .st-alert {
+        font-size: 12px; line-height: 1.35; padding: 6px 8px; margin-bottom: 6px;
+        border-radius: 6px; background: #fff; border-left: 4px solid #e8a400;
+      }
+      .st-alert.sev-3 { border-left-color: #c0392b; }
+      .st-alert.sev-2 { border-left-color: #e8730c; }
+
+      /* Line-status strip (top center) */
+      #status-strip {
+        position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+        z-index: 15; display: flex; align-items: center; gap: 8px;
+        background: rgba(255,255,255,0.94); color: #111; padding: 5px 10px;
+        border-radius: 20px; box-shadow: 0 1px 6px rgba(0,0,0,0.3);
+        cursor: pointer; max-width: 90vw; overflow: hidden; font-size: 12px;
+      }
+      #status-strip .ss-title { font-weight: 700; white-space: nowrap; }
+      #status-strip .ss-bullets { display: flex; gap: 3px; overflow: hidden; }
+      .ss-bullet {
+        position: relative; display: inline-flex; align-items: center;
+        justify-content: center; width: 20px; height: 20px; border-radius: 50%;
+        font-weight: 700; font-size: 11px; flex: none;
+      }
+      .ss-badge {
+        position: absolute; top: -2px; right: -2px; width: 8px; height: 8px;
+        border-radius: 50%; border: 1.5px solid #fff;
+      }
+
+      /* Alerts drawer */
+      #alerts-drawer {
+        position: absolute; top: 44px; left: 50%; transform: translateX(-50%);
+        z-index: 16; width: 380px; max-width: 92vw; max-height: 70vh;
+        overflow-y: auto; background: #fff; color: #111; border-radius: 10px;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+      }
+      .al-head {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 10px 14px; background: #222; color: #fff;
+        position: sticky; top: 0; font-size: 15px;
+      }
+      .al-close { cursor: pointer; }
+      .al-item { padding: 10px 14px; border-bottom: 1px solid #eee; border-left: 4px solid #ccc; }
+      .al-item.sev-3 { border-left-color: #c0392b; }
+      .al-item.sev-2 { border-left-color: #e8730c; }
+      .al-item.sev-1 { border-left-color: #e8a400; }
+      .al-item-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+      .al-chip {
+        display: inline-flex; align-items: center; justify-content: center;
+        min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px;
+        background: #444; color: #fff; font-weight: 700; font-size: 11px;
+      }
+      .al-effect { font-weight: 700; font-size: 12px; color: #555; }
+      .al-header { font-size: 13px; line-height: 1.35; }
+      .al-empty { padding: 16px; color: #888; }
+
+      /* Attribution / disclaimer footer */
+      #disclaimer {
+        position: absolute; bottom: 0; right: 0; z-index: 10;
+        background: rgba(255,255,255,0.8); color: #333; font-size: 10px;
+        padding: 2px 6px; border-top-left-radius: 6px; max-width: 60%;
+        text-align: right;
+      }
+      #disclaimer a { color: #0b60d6; }
     </style>
   </head>
   <body>
     <div id="map"></div>
     <div id="hud">connecting…</div>
+    <div id="legend"><h4>Subway Lines</h4><div class="rows"></div></div>
+    <div id="disclaimer">
+      Live data from the
+      <a href="https://api.mta.info/" target="_blank" rel="noopener">MTA GTFS-realtime feed</a>.
+      Positions are estimated and may be inaccurate; see
+      <a href="https://www.mta.info" target="_blank" rel="noopener">mta.info</a> for official service info.
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

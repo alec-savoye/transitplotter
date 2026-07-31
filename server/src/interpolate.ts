@@ -50,7 +50,17 @@ export function computeSnapshots(legs: ActiveLeg[], stat: StaticData): TrainSnap
       continue; // no way to place this train
     }
 
-    out.push({ id: leg.tripId, r: leg.routeId, lng, lat, brg, s: status });
+    out.push({
+      id: leg.tripId,
+      r: leg.routeId,
+      lng,
+      lat,
+      brg,
+      s: status,
+      ns: leg.nextStopName ?? undefined,
+      eta: Math.round(leg.arriveTs),
+      dest: leg.destName ?? undefined,
+    });
   }
 
   return out;

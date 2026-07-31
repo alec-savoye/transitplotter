@@ -5,6 +5,9 @@ import { WebSocketServer, WebSocket } from "ws";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import type { ServerMessage, RouteMeta } from "@transitplotter/shared";
 import type { StaticData } from "./static/load.js";
+import type { FeedStore } from "./feedstore.js";
+import { buildStationArrivals } from "./arrivals.js";
+import { rollUpStatus } from "./alerts.js";
 
 export class Broadcaster {
   private wss: WebSocketServer;
@@ -15,7 +18,10 @@ export class Broadcaster {
   private routesGeoJson: string;
   private stationsGeoJson: string;
 
-  constructor(private stat: StaticData) {
+  constructor(
+    private stat: StaticData,
+    private feedStore: FeedStore
+  ) {
     this.routesGeoJson = JSON.stringify(buildRoutesGeoJson(stat));
     this.stationsGeoJson = JSON.stringify(buildStationsGeoJson(stat));
 
@@ -44,6 +50,37 @@ export class Broadcaster {
     if (req.url === "/geo/stations") {
       res.setHeader("Content-Type", "application/json");
       res.end(this.stationsGeoJson);
+      return;
+    }
+    // All active subway alerts.
+    if (req.url === "/alerts") {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(this.feedStore.getAlerts()));
+      return;
+    }
+    // Per-route rolled-up status for the line-status strip.
+    if (req.url === "/status") {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(rollUpStatus(this.feedStore.getAlerts(), this.stat)));
+      return;
+    }
+    // Live arrivals board: /station/<stopId>/arrivals
+    const m = req.url && /^\/station\/([^/]+)\/arrivals\/?$/.exec(req.url);
+    if (m) {
+      const stationId = decodeURIComponent(m[1]);
+      const arrivals = buildStationArrivals(
+        stationId,
+        this.feedStore.get(),
+        this.stat,
+        this.feedStore.getAlerts()
+      );
+      res.setHeader("Content-Type", "application/json");
+      if (!arrivals) {
+        res.statusCode = 404;
+        res.end(JSON.stringify({ error: "unknown station" }));
+        return;
+      }
+      res.end(JSON.stringify(arrivals));
       return;
     }
     if (req.url === "/health") {
@@ -131,6 +168,7 @@ function buildStationsGeoJson(stat: StaticData): GeoJSON.FeatureCollection {
     features.push({
       type: "Feature",
       properties: {
+        id: base, // base station id, for arrivals lookups
         name: s.name,
         routes: routeIds.join(""), // e.g. "456"
         color,

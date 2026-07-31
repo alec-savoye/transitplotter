@@ -4,6 +4,7 @@
 import { loadStatic } from "./static/load.js";
 import { Broadcaster } from "./ws.js";
 import { startLoops } from "./tick.js";
+import { FeedStore } from "./feedstore.js";
 
 const PORT = Number(process.env.PORT ?? 8080);
 
@@ -15,9 +16,10 @@ export function startServer(port = PORT) {
       `${stat.trips.size} trips, ${stat.shapes.size} shapes`
   );
 
-  const broadcaster = new Broadcaster(stat);
+  const feedStore = new FeedStore();
+  const broadcaster = new Broadcaster(stat, feedStore);
   broadcaster.listen(port);
-  startLoops(stat, broadcaster);
+  startLoops(stat, broadcaster, feedStore);
   return broadcaster;
 }
 

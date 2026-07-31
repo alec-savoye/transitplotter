@@ -18,3 +18,13 @@ export const FEED_KEYS = Object.keys(FEED_URLS);
 
 /** How often to poll each feed (ms). MTA regenerates every ~30s. */
 export const POLL_INTERVAL_MS = 20_000;
+
+/**
+ * GTFS-realtime Service Alerts feed (all agencies; we filter to subway).
+ * Note: the path separator MUST be URL-encoded (%2F) — the un-encoded form
+ * returns 403.
+ */
+export const ALERTS_URL = `${BASE}/camsys%2Fall-alerts`;
+
+/** Alerts change slowly; poll less often than positions. */
+export const ALERTS_POLL_INTERVAL_MS = 60_000;
