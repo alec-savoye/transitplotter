@@ -1,0 +1,65 @@
+# Everything runs in Docker. Nothing is installed on the host.
+#
+#   docker compose build
+#   docker compose run --rm build-static     # download+cache gtfs_static.sqlite
+#   docker compose up server web              # run the app
+#
+# Large cached assets (the GTFS SQLite) live OFF the boot drive, bind-mounted
+# from GTFS_CACHE_HOST into /cache. Only source/config lives under the repo.
+
+x-cache-env: &cache-env
+  GTFS_CACHE_DIR: /cache
+
+x-cache-volume: &cache-volume
+  type: bind
+  source: ${GTFS_CACHE_HOST:-/srv/active-raid/LIBRARIES/247/tmp-trainsplotter}
+  target: /cache
+
+services:
+  # Backend: polls MTA feeds, computes positions, serves WS + /routes.
+  server:
+    build: .
+    command: npm run dev:server
+    ports:
+      # host 8090 (8080 is taken by pihole); container still 8080
+      - "8090:8080"
+    environment:
+      <<: *cache-env
+      PORT: 8080
+    volumes:
+      - ./:/app
+      - /app/node_modules
+      - /app/shared/node_modules
+      - /app/server/node_modules
+      - /app/web/node_modules
+      - *cache-volume
+
+  # Frontend: Vite dev server (dumb renderer).
+  web:
+    build: .
+    command: npm run dev:web
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_SERVER_HTTP: http://localhost:8090
+      VITE_SERVER_WS: ws://localhost:8090
+    volumes:
+      - ./:/app
+      - /app/node_modules
+      - /app/shared/node_modules
+      - /app/server/node_modules
+      - /app/web/node_modules
+
+  # One-shot: download the MTA static ZIP and cache it as SQLite off-boot.
+  # Behind a profile so it does NOT run on `docker compose up`; invoke with:
+  #   docker compose run --rm build-static
+  build-static:
+    build: .
+    profiles: ["tools"]
+    command: npm run build-static
+    environment:
+      <<: *cache-env
+    volumes:
+      - ./:/app
+      - /app/node_modules
+      - *cache-volume

@@ -1,0 +1,24 @@
+{
+  "name": "@transitplotter/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@transitplotter/shared": "*",
+    "@turf/turf": "^7.1.0",
+    "better-sqlite3": "^11.7.0",
+    "gtfs-realtime-bindings": "^1.1.1",
+    "protobufjs": "^7.4.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/geojson": "^7946.0.15",
+    "@types/ws": "^8.5.13"
+  }
+}

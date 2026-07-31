@@ -1,0 +1,25 @@
+{
+  "name": "transitplotter",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Live NYC subway map — backend computes train positions from GTFS-realtime, browser renders.",
+  "workspaces": [
+    "shared",
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "build-static": "tsx scripts/build-static.ts",
+    "dev:server": "npm run dev --workspace server",
+    "dev:web": "npm run dev --workspace web"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "@types/node": "^22.10.2",
+    "adm-zip": "^0.5.16",
+    "csv-parse": "^5.6.0",
+    "better-sqlite3": "^11.7.0",
+    "@types/adm-zip": "^0.5.7"
+  }
+}

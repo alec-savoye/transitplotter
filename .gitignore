@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+# Cached GTFS static DB lives off-boot-drive (see docker-compose GTFS_CACHE_HOST)
+# and is never committed. Local fallback cache dir also ignored.
+.cache/
+data/
