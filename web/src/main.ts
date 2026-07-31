@@ -52,7 +52,7 @@ function connect(trainLayer: TrainLayer) {
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data) as ServerMessage;
     trainLayer.update(msg);
-    hud.textContent = `${msg.trains.length} trains`;
+    hud.textContent = `${msg.legs.length} trains`;
   };
   ws.onclose = () => {
     hud.textContent = "disconnected — reconnecting…";

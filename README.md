@@ -1,16 +1,16 @@
 # TransitPlotter
 
-Live NYC subway map. A backend polls the MTA's realtime feeds, computes where
-every train is *right now* (the feeds don't give coordinates — see below), and
-streams positions over WebSocket to a browser that renders them moving between
-stations on a stylized subway map.
+Live NYC subway map. A backend polls the MTA's realtime feeds and, since the
+feeds don't give coordinates (see below), derives each train's *current leg*
+(the track segment it's on plus schedule times). It broadcasts those legs over
+WebSocket only when the feed refreshes; the **browser interpolates the live
+moving position** along the track every animation frame.
 
-- **Backend** (`server/`): Node.js/TypeScript. Polls feeds, computes positions,
-  broadcasts over WebSocket, serves static map geometry and a live per-station
-  arrivals API over HTTP.
-- **Frontend** (`web/`): Vite + MapLibre GL. A "dumb" renderer — it draws the
-  positions the backend sends and tweens between them, and shows contextual UI
-  (train popups, station arrivals board).
+- **Backend** (`server/`): Node.js/TypeScript. Polls feeds, builds train legs,
+  broadcasts over WebSocket, serves static map geometry and JSON APIs over HTTP.
+- **Frontend** (`web/`): Vite + MapLibre GL. Interpolates train positions
+  client-side from the legs and shows contextual UI (train popups, station
+  arrivals board, alerts, trip planner).
 - **Shared** (`shared/`): the tiny wire contract shared by both.
 
 Everything runs in Docker; nothing is installed on the host.
@@ -161,15 +161,18 @@ location automatically, so `http://<LAN-IP>:5173` just works.
 | `/alerts`                     | all active subway service alerts (`ServiceAlert[]`) |
 | `/status`                     | per-route rolled-up status (`RouteStatus[]`)      |
 | `/plan?from=..&to=..`         | plan a journey between two places (`Itinerary`)   |
-| WebSocket `/`                 | pushes `{ t, trains: [...] }` once per second     |
+| WebSocket `/`                 | pushes `{ t, legs: [...] }` when the feed refreshes |
 
 `from`/`to` may be free-text addresses (geocoded, biased to NYC) or a literal
 `lat,lon` pair. The response is an `Itinerary` with ride legs (route, boarding
 and alighting station, stop count, estimated minutes) and a transfer count.
 
-**Train snapshot** (`TrainSnapshot`, over WebSocket) includes: `id`, route `r`,
-`lng`/`lat`, bearing `brg`, status `s` (`moving` \| `stopped` \| `stalled`), and
-— when known — next stop `ns`, arrival `eta` (epoch s), and destination `dest`.
+**Train leg** (`TrainLeg`, over WebSocket) includes: `id`, route `r`, the
+segment polyline `path` (`[lng,lat][]` following the real track between the
+previous and next stop), depart `d0` and arrive `d1` times (epoch s), feed
+header `hts` (for stall detection), and — when known — next stop `ns` and
+destination `dest`. The browser computes the live position/bearing/status by
+interpolating along `path` by time fraction each frame.
 
 **Arrivals board** (`GET /station/<stopId>/arrivals`) returns:
 
@@ -197,19 +200,23 @@ and alighting station, stop count, estimated minutes) and a transfer count.
    stop projected onto it to get its distance along the track).
 2. **Poll (20s):** fetch all 8 realtime feeds, decode protobuf, extract each
    trip's upcoming stop predictions.
-3. **Build legs:** for each train, find the segment it's on (previous stop ->
-   next stop) and look up both stops' distances along the canonical line.
-4. **Tick (1s):** `progress = (now - departTs) / (arriveTs - departTs)`, then
-   find the point at that fraction **along the shape polyline** (not a straight
-   line between stations), so trains follow the real curved track. Stalled
-   trains (feed timestamp >90s stale) are frozen. Broadcast over WebSocket.
+3. **Build legs (server):** for each train, find the segment it's on (previous
+   stop -> next stop), slice the **shape polyline** to just that segment (the
+   real curved track, not a straight line between stations), and broadcast it
+   as a `TrainLeg` with the schedule times. This happens only when the feed
+   refreshes (~20s), so the WebSocket is quiet between refreshes.
 
    Note: shape ids encode route + direction with a variable number of dots
    (`5..N08R`, `GS.N01R`, `SI..S03R`); the parser accepts all forms. Routes with
    no shapes of their own (e.g. **W**) borrow a parallel line's geometry (W→N)
    so they still follow the track instead of drawing straight segments.
-5. **Browser:** tweens each train between the 1s snapshots with
-   `requestAnimationFrame` for smooth motion.
+4. **Interpolate (browser):** every animation frame, compute
+   `progress = (now - d0) / (d1 - d0)` and place the train at that fraction
+   **along the leg polyline** (by arc length), deriving bearing and status
+   (`moving`/`stopped`/`stalled`, the last when the feed header is >90 s stale).
+   This keeps motion smooth at the display's frame rate with no per-second
+   server traffic — the interpolation work was moved off the server to fix the
+   streaming lag.
 
 ### Live arrivals
 
@@ -257,12 +264,12 @@ server/src/
   alerts.ts                fetch + classify service alerts; per-route rollup
   feedstore.ts             holds latest parsed feed + alerts for lookups
   state.ts                 realtime + static -> active "legs" per train
-  interpolate.ts           legs -> positions along track each tick
+  legwire.ts               ActiveLeg -> compact TrainLeg (segment polyline)
   arrivals.ts              build per-station arrivals board (+ station alerts)
   routing/graph.ts         build ride + transfer graph from the schedule
   routing/plan.ts          Dijkstra journey search -> itinerary legs
   routing/geocode.ts       address -> coordinate (configurable Nominatim)
-  tick.ts                  poll (20s) + alerts (60s) + broadcast (1s) loops
+  tick.ts                  poll feeds (20s) + alerts (60s); broadcast legs
   ws.ts                    WebSocket broadcaster + HTTP endpoints
   static/load.ts           load SQLite; build canonical route/dir lines
   static/geometry.ts       project/interpolate points along shapes
@@ -270,7 +277,7 @@ web/src/
   main.ts                  bootstrap: map, layers, legend, popups, panels
   basemap.ts               map style, route/station/train layers, disruption
   bullets.ts               render MTA route-bullet icons to canvas
-  trains.ts                consume WS snapshots + rAF tween + stalled pulse
+  trains.ts                interpolate live positions from legs each frame
   ui.ts                    line legend + click-a-train popup
   station.ts               click-a-station arrivals panel (+ alerts)
   alerts.ts                line-status strip + alerts drawer

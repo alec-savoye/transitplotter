@@ -1,40 +1,47 @@
 // Wire contract shared between server and web.
 // Kept intentionally tiny: the browser is a dumb renderer.
 
-/** Movement state of a train, derived server-side. */
+/** Movement state of a train, derived client-side from a TrainLeg. */
 export type TrainStatus = "moving" | "stopped" | "stalled";
 
 /**
- * A single train's computed position at broadcast time.
+ * A train's *current leg*: the segment it is traversing (prev stop -> next
+ * stop), sent when feeds refresh (~20s). The browser interpolates the live
+ * position along `path` continuously using the schedule times, so the server
+ * no longer needs to stream positions every second.
+ *
  * Field names are short to keep the WebSocket payload small.
  */
-export interface TrainSnapshot {
+export interface TrainLeg {
   /** Unique trip id (GTFS-realtime trip_id). */
   id: string;
   /** Route id, e.g. "1", "A", "L". Used for coloring. */
   r: string;
-  /** Longitude (WGS84). */
-  lng: number;
-  /** Latitude (WGS84). */
-  lat: number;
-  /** Bearing in degrees (0 = north, clockwise), for arrow orientation. */
-  brg: number;
-  /** Movement state. */
-  s: TrainStatus;
-  /** Next stop name (destination of the current leg), if known. */
+  /**
+   * The segment polyline in travel order, as [lng, lat] pairs. For shaped legs
+   * this follows the real curved track between the two stops; for fallbacks it
+   * is just the two stop coordinates. Position is interpolated linearly by
+   * arc-length as a function of time fraction.
+   */
+  path: [number, number][];
+  /** Departure from the previous stop (epoch seconds). */
+  d0: number;
+  /** Predicted arrival at the next stop (epoch seconds). */
+  d1: number;
+  /** Feed header timestamp (epoch seconds) for stall detection. */
+  hts: number;
+  /** Next stop name, if known. */
   ns?: string;
-  /** Predicted arrival at the next stop (epoch seconds), if known. */
-  eta?: number;
   /** Final destination stop name for the trip, if known. */
   dest?: string;
 }
 
-/** Message pushed from server to clients each tick. */
+/** Message pushed from server to clients whenever the feed refreshes. */
 export interface ServerMessage {
-  /** Server timestamp (epoch ms) when this snapshot was computed. */
+  /** Server timestamp (epoch ms) when these legs were built. */
   t: number;
-  /** All active trains. */
-  trains: TrainSnapshot[];
+  /** All active train legs. */
+  legs: TrainLeg[];
 }
 
 /** Static route metadata sent once on connect so the client can draw legend/colors. */

@@ -1,5 +1,6 @@
-// WebSocket + minimal HTTP server. Broadcasts the latest snapshot to all
-// connected clients and serves route metadata on request.
+// WebSocket + minimal HTTP server. Broadcasts the latest train legs to all
+// connected clients (only when the feed refreshes) and serves route metadata
+// and the JSON APIs. Clients interpolate live positions from the legs.
 
 import { WebSocketServer, WebSocket } from "ws";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
@@ -15,7 +16,7 @@ import { geocode } from "./routing/geocode.js";
 export class Broadcaster {
   private wss: WebSocketServer;
   private http;
-  private latest: ServerMessage = { t: Date.now(), trains: [] };
+  private latest: ServerMessage = { t: Date.now(), legs: [] };
 
   // Precomputed GeoJSON for the static map (built once).
   private routesGeoJson: string;
