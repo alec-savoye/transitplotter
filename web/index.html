@@ -77,21 +77,38 @@
       .bus-zoom label { display: block; margin-bottom: 2px; opacity: 0.85; }
       .bus-zoom input[type="range"] { width: 100%; }
 
-      /* Mobile: smaller, tighter controls so they don't dominate the screen. */
+      /* Mobile: smaller, tighter controls so they don't dominate the screen.
+         Applies when auto-detected mobile (unless the user forced desktop) OR
+         when the user explicitly forces mobile from the View toggle. The rule
+         list is duplicated because CSS can't combine a media query and a class
+         selector with OR in a single block. */
       @media (max-width: 640px), (pointer: coarse) {
-        #controls {
+        html:not(.tp-force-desktop) #controls {
           top: 132px; left: 6px; gap: 4px; max-width: 132px;
         }
-        .ctl-btn {
+        html:not(.tp-force-desktop) .ctl-btn {
           padding: 4px 7px; font-size: 11px; border-radius: 5px;
         }
-        #bus-group { padding: 4px; }
-        #bus-group .bg-title { font-size: 11px; margin-bottom: 3px; }
-        .bus-boro { padding: 3px 6px; font-size: 10px; margin-bottom: 3px; }
-        .bus-zoom { font-size: 10px; }
-        #legend { max-width: 150px; padding: 6px 7px; font-size: 11px; }
-        #legend .lg-bullet { width: 17px; height: 17px; font-size: 10px; }
+        html:not(.tp-force-desktop) #bus-group { padding: 4px; }
+        html:not(.tp-force-desktop) #bus-group .bg-title { font-size: 11px; margin-bottom: 3px; }
+        html:not(.tp-force-desktop) .bus-boro { padding: 3px 6px; font-size: 10px; margin-bottom: 3px; }
+        html:not(.tp-force-desktop) .bus-zoom { font-size: 10px; }
+        html:not(.tp-force-desktop) #legend { max-width: 150px; padding: 6px 7px; font-size: 11px; }
+        html:not(.tp-force-desktop) #legend .lg-bullet { width: 17px; height: 17px; font-size: 10px; }
       }
+      /* Forced-mobile: same compact styling on any screen size. */
+      html.tp-force-mobile #controls {
+        top: 132px; left: 6px; gap: 4px; max-width: 132px;
+      }
+      html.tp-force-mobile .ctl-btn {
+        padding: 4px 7px; font-size: 11px; border-radius: 5px;
+      }
+      html.tp-force-mobile #bus-group { padding: 4px; }
+      html.tp-force-mobile #bus-group .bg-title { font-size: 11px; margin-bottom: 3px; }
+      html.tp-force-mobile .bus-boro { padding: 3px 6px; font-size: 10px; margin-bottom: 3px; }
+      html.tp-force-mobile .bus-zoom { font-size: 10px; }
+      html.tp-force-mobile #legend { max-width: 150px; padding: 6px 7px; font-size: 11px; }
+      html.tp-force-mobile #legend .lg-bullet { width: 17px; height: 17px; font-size: 10px; }
 
       .tp-ferry {
         display: inline-flex; align-items: center; justify-content: center;
@@ -429,6 +446,7 @@
       <button id="trackrecords-toggle" class="ctl-btn" title="Show reliability track records">Track Records: Off</button>
       <button id="ferries-toggle" class="ctl-btn" title="Show NYC Ferry boats">Ferries: On</button>
       <button id="planner-toggle" class="ctl-btn" title="Plan a trip">Trip Planner: Off</button>
+      <button id="view-toggle" class="ctl-btn" title="Force mobile or desktop layout (Auto detects your device)">View: Auto</button>
       <div id="bus-group">
         <div class="bg-title">Buses</div>
         <button class="bus-boro active" data-boro="manhattan">Manhattan</button>

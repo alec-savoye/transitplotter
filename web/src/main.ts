@@ -20,7 +20,7 @@ import { attachHotspotSummary } from "./hotspot.js";
 import { TrackRecords } from "./trackrecords.js";
 import { attachTrackRecordSummary } from "./trackrecord-summary.js";
 import { attachAdmin } from "./admin.js";
-import { SERVER_HTTP, SERVER_WS } from "./config.js";
+import { SERVER_HTTP, SERVER_WS, VIEW_MODE, cycleViewMode } from "./config.js";
 
 const hud = document.getElementById("hud")!;
 
@@ -77,6 +77,9 @@ async function main() {
   // "Buses" per-borough toggles + zoom-gate slider.
   setupBusControls(map);
 
+  // "View" toggle — force Auto/Mobile/Desktop layout + perf profile.
+  setupViewToggle();
+
   // Hidden admin: quadruple-click the map to open the visitor-stats overlay.
   attachAdmin(map, SERVER_HTTP);
 
@@ -131,6 +134,21 @@ function setupBusControls(map: maplibregl.Map) {
       apply(Number(slider.value));
     });
   }
+}
+
+/**
+ * Wires the View toggle: cycles Auto → Mobile → Desktop. Forcing a mode
+ * persists the choice and reloads so the map's pixelRatio/pitch and the vehicle
+ * FPS cap are re-applied cleanly. The button label reflects the current mode.
+ */
+function setupViewToggle() {
+  const btn = document.getElementById("view-toggle");
+  if (!btn) return;
+  const label =
+    VIEW_MODE === "mobile" ? "View: Mobile" : VIEW_MODE === "desktop" ? "View: Desktop" : "View: Auto";
+  btn.textContent = label;
+  btn.classList.toggle("active", VIEW_MODE !== "auto");
+  btn.addEventListener("click", () => cycleViewMode());
 }
 
 /** Wires the Trip Planner on/off toggle button (planner starts hidden). */

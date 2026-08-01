@@ -5,17 +5,12 @@
 import maplibregl from "maplibre-gl";
 import type { RouteMeta } from "@transitplotter/shared";
 import { registerAllBullets, BULLET_PREFIX, FERRY_PREFIX, BUS_PREFIX } from "./bullets.js";
+import { IS_MOBILE } from "./config.js";
 
 // Esri "World Imagery" satellite basemap. No API key required.
 const SATELLITE_TILES = [
   "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
 ];
-
-/** Coarse-pointer / small-screen devices we treat as "mobile" for perf tuning. */
-const IS_MOBILE =
-  typeof navigator !== "undefined" &&
-  (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
-    (typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches));
 
 export function createMap(container: string): maplibregl.Map {
   const map = new maplibregl.Map({

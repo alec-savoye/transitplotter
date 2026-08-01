@@ -6,6 +6,7 @@
 import type maplibregl from "maplibre-gl";
 import type { ServerMessage, TrainLeg, TrainStatus, RouteMeta } from "@transitplotter/shared";
 import { emptyFC } from "./basemap.js";
+import { IS_MOBILE } from "./config.js";
 
 /** If the feed header is this many seconds stale, treat the train as stalled. */
 const STALL_THRESHOLD_S = 90;
@@ -36,6 +37,11 @@ interface Leg {
   len: number;
   /** epoch ms when this leg was received (for stall clock). */
   recvMs: number;
+  /** Rendered position at the instant this leg replaced the previous one. */
+  prevLng?: number;
+  prevLat?: number;
+  /** epoch ms when the smoothing transition to this leg began. */
+  transStartMs?: number;
 }
 
 interface Sample {
@@ -86,12 +92,17 @@ export interface LiveTrain {
  * animation frame (60fps) overwhelms mobile devices and can crash the tab.
  * Interpolation still looks smooth at a lower rate. Mobile gets a lower cap.
  */
-const isMobile =
-  typeof navigator !== "undefined" &&
-  (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
-    (typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches));
-const TARGET_FPS = isMobile ? 12 : 30;
+const TARGET_FPS = IS_MOBILE ? 12 : 30;
 const FRAME_MIN_MS = 1000 / TARGET_FPS;
+
+/**
+ * When a fresh batch of legs arrives (~every 20–30s), each train's schedule
+ * window (d0/d1) and polyline are recomputed, so the interpolated position can
+ * snap to a slightly different spot — producing a synchronized "jolt" across
+ * all vehicles. To hide it, we ease from each train's last-rendered position to
+ * its new interpolated position over this many milliseconds.
+ */
+const TRANSITION_MS = 900;
 
 export class TrainLayer {
   private legs = new Map<string, Leg>();
@@ -132,6 +143,9 @@ export class TrainLayer {
       seen.add(l.id);
       const pts = l.path;
       const { cum, len } = buildCum(pts);
+      // Anchor the smoothing transition at the position we last rendered for
+      // this train (if any), so the update eases in instead of snapping.
+      const last = this.live.get(l.id);
       this.legs.set(l.id, {
         r: l.r,
         ns: l.ns,
@@ -149,6 +163,9 @@ export class TrainLayer {
         cum,
         len,
         recvMs,
+        prevLng: last?.lng,
+        prevLat: last?.lat,
+        transStartMs: last ? recvMs : undefined,
       });
     }
     // Drop trains no longer reported.
@@ -206,7 +223,8 @@ export class TrainLayer {
     }
     this.lastFrameMs = now;
 
-    const nowSec = Date.now() / 1000;
+    const nowMs = Date.now();
+    const nowSec = nowMs / 1000;
 
     // Slow pulse for the stalled-train ring (~2.5s period).
     if (this.map.getLayer("trains-halo")) {
@@ -223,9 +241,29 @@ export class TrainLayer {
       this.live.clear();
       for (const [id, l] of this.legs) {
         const s = this.sample(l, nowSec);
+
+        // Ease from the pre-update position to the freshly computed one so the
+        // periodic feed refresh doesn't cause a visible jump. Once the
+        // transition completes, render the true interpolated position directly.
+        let lng = s.lng;
+        let lat = s.lat;
+        if (l.transStartMs != null && l.prevLng != null && l.prevLat != null) {
+          const p = (nowMs - l.transStartMs) / TRANSITION_MS;
+          if (p < 1) {
+            const e = p * (2 - p); // ease-out quad
+            lng = l.prevLng + (s.lng - l.prevLng) * e;
+            lat = l.prevLat + (s.lat - l.prevLat) * e;
+          } else {
+            // Transition done — clear so we stop blending.
+            l.transStartMs = undefined;
+            l.prevLng = undefined;
+            l.prevLat = undefined;
+          }
+        }
+
         fc.features.push({
           type: "Feature",
-          geometry: { type: "Point", coordinates: [s.lng, s.lat] },
+          geometry: { type: "Point", coordinates: [lng, lat] },
           properties: {
             id,
             route: l.r,
@@ -248,8 +286,8 @@ export class TrainLayer {
         this.live.set(id, {
           id,
           route: l.r,
-          lng: s.lng,
-          lat: s.lat,
+          lng,
+          lat,
           dly: l.dly,
           status: s.status,
           ns: l.ns ?? "",
@@ -268,7 +306,7 @@ export class TrainLayer {
           const weight = Math.min(1, effDelay / HOTSPOT_MAX_S);
           heat.features.push({
             type: "Feature",
-            geometry: { type: "Point", coordinates: [s.lng, s.lat] },
+            geometry: { type: "Point", coordinates: [lng, lat] },
             properties: { weight },
           });
         }

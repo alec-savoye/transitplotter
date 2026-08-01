@@ -35,3 +35,58 @@ function deriveWs(): string {
 
 export const SERVER_HTTP = import.meta.env.VITE_SERVER_HTTP ?? deriveHttp();
 export const SERVER_WS = import.meta.env.VITE_SERVER_WS ?? deriveWs();
+
+// ---------------------------------------------------------------------------
+// View mode (mobile vs desktop) — single source of truth.
+//
+// "auto" detects touch/small screens and applies the mobile perf profile
+// (lower FPS cap, capped pixelRatio, flat map, compact controls). Users can
+// force "mobile" or "desktop" from the View toggle; the choice is persisted and
+// a full reload re-applies pixelRatio/pitch/FPS cleanly.
+// ---------------------------------------------------------------------------
+
+export type ViewMode = "auto" | "mobile" | "desktop";
+
+const VIEW_KEY = "tp-view";
+
+function readViewMode(): ViewMode {
+  try {
+    const v = localStorage.getItem(VIEW_KEY);
+    if (v === "mobile" || v === "desktop" || v === "auto") return v;
+  } catch {
+    /* localStorage unavailable (private mode etc.) */
+  }
+  return "auto";
+}
+
+/** UA/media auto-detection of a mobile-class device. */
+const autoMobile =
+  typeof navigator !== "undefined" &&
+  (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+    (typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches));
+
+/** The user's explicit setting (or "auto"). */
+export const VIEW_MODE: ViewMode = readViewMode();
+
+/** Effective mobile flag after applying any forced override. */
+export const IS_MOBILE: boolean =
+  VIEW_MODE === "mobile" ? true : VIEW_MODE === "desktop" ? false : autoMobile;
+
+// Tag <html> so CSS can force the compact layout regardless of screen size.
+if (typeof document !== "undefined") {
+  const el = document.documentElement;
+  el.classList.toggle("tp-force-mobile", VIEW_MODE === "mobile");
+  el.classList.toggle("tp-force-desktop", VIEW_MODE === "desktop");
+}
+
+/** Advance auto → mobile → desktop → auto, persist, and reload to re-apply. */
+export function cycleViewMode(): void {
+  const next: ViewMode =
+    VIEW_MODE === "auto" ? "mobile" : VIEW_MODE === "mobile" ? "desktop" : "auto";
+  try {
+    localStorage.setItem(VIEW_KEY, next);
+  } catch {
+    /* ignore */
+  }
+  location.reload();
+}
