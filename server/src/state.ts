@@ -30,6 +30,9 @@ export interface ActiveLeg {
 
   nextStopName: string | null; // human name of the next stop
   destName: string | null; // human name of the trip's final stop
+
+  mode?: "subway" | "ferry"; // defaults to subway when absent
+  label?: string; // vessel/vehicle label (ferries)
 }
 
 /** Direction from a GTFS-realtime stop id suffix, e.g. "125N" -> "N". */

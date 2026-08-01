@@ -35,6 +35,7 @@ export interface TripStatic {
   routeId: string;
   shapeId: string;
   directionId: number | null;
+  headsign?: string;
 }
 
 export interface StopStatic {
@@ -73,6 +74,8 @@ export interface StaticData {
   shapesByRouteDir: Map<string, Shape[]>;
   /** "<routeId>|<N|S>" -> canonical line used for interpolation. */
   lineByRouteDir: Map<string, RouteDirLine>;
+  /** route_id -> agency ("subway" | "ferry"). */
+  routeAgency: Map<string, string>;
 }
 
 /**
@@ -108,14 +111,16 @@ export function loadStatic(): StaticData {
 
   // routes
   const routes = new Map<string, RouteMeta>();
+  const routeAgency = new Map<string, string>();
   for (const r of db
-    .prepare(`SELECT route_id, route_short_name, route_long_name, route_color FROM routes`)
+    .prepare(`SELECT route_id, route_short_name, route_long_name, route_color, agency FROM routes`)
     .all() as any[]) {
     routes.set(r.route_id, {
       id: r.route_id,
       color: r.route_color ? `#${r.route_color}` : "#888888",
       name: r.route_long_name || r.route_short_name || r.route_id,
     });
+    routeAgency.set(r.route_id, r.agency ?? "subway");
   }
 
   // stops (only those with coordinates)
@@ -245,5 +250,6 @@ export function loadStatic(): StaticData {
     tripStops,
     shapesByRouteDir,
     lineByRouteDir,
+    routeAgency,
   };
 }

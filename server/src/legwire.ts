@@ -113,6 +113,8 @@ export function buildTrainLegs(legs: ActiveLeg[], graph: RoutingGraph): TrainLeg
       ns: leg.nextStopName ?? undefined,
       dest: leg.destName ?? undefined,
       dly,
+      mode: leg.mode && leg.mode !== "subway" ? leg.mode : undefined,
+      label: leg.label || undefined,
     });
   }
   return out;

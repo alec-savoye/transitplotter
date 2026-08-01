@@ -4,7 +4,7 @@
 
 import maplibregl from "maplibre-gl";
 import type { RouteMeta } from "@transitplotter/shared";
-import { registerAllBullets, BULLET_PREFIX } from "./bullets.js";
+import { registerAllBullets, BULLET_PREFIX, FERRY_PREFIX } from "./bullets.js";
 
 // Esri "World Imagery" satellite basemap. No API key required.
 const SATELLITE_TILES = [
@@ -62,12 +62,28 @@ export async function addLayers(
     id: "routes",
     type: "line",
     source: "routes",
+    filter: ["!=", ["get", "mode"], "ferry"],
     layout: { "line-cap": "round", "line-join": "round" },
     paint: {
       "line-color": ["get", "color"],
       "line-width": 3,
       // Disrupted routes (feature-state.disrupted) are dimmed.
       "line-opacity": ["case", ["boolean", ["feature-state", "disrupted"], false], 0.35, 0.9],
+    },
+  });
+
+  // Ferry routes: dashed, semi-transparent lines to distinguish water routes.
+  map.addLayer({
+    id: "routes-ferry",
+    type: "line",
+    source: "routes",
+    filter: ["==", ["get", "mode"], "ferry"],
+    layout: { "line-cap": "round", "line-join": "round", visibility: "visible" },
+    paint: {
+      "line-color": ["get", "color"],
+      "line-width": 2,
+      "line-dasharray": [2, 2],
+      "line-opacity": 0.7,
     },
   });
 
@@ -194,6 +210,7 @@ export async function addLayers(
     id: "trains",
     type: "symbol",
     source: "trains",
+    filter: ["!=", ["get", "mode"], "ferry"],
     layout: {
       // route id -> "bullet-<route>", falling back to "bullet-?"
       "icon-image": [
@@ -205,6 +222,30 @@ export async function addLayers(
       "icon-size": ["interpolate", ["linear"], ["zoom"], 10, 0.5, 14, 0.9],
     },
   });
+
+  // Ferries as boat badges (separate layer so we can toggle them independently).
+  map.addLayer({
+    id: "ferries",
+    type: "symbol",
+    source: "trains",
+    filter: ["==", ["get", "mode"], "ferry"],
+    layout: {
+      "icon-image": [
+        "coalesce",
+        ["image", ["concat", FERRY_PREFIX, ["get", "route"]]],
+        ["image", `${FERRY_PREFIX}?`],
+      ],
+      "icon-allow-overlap": true,
+      "icon-size": ["interpolate", ["linear"], ["zoom"], 10, 0.6, 14, 1.0],
+    },
+  });
+}
+
+/** Show or hide the ferry markers layer. */
+export function setFerriesVisible(map: maplibregl.Map, visible: boolean) {
+  if (map.getLayer("ferries")) {
+    map.setLayoutProperty("ferries", "visibility", visible ? "visible" : "none");
+  }
 }
 
 /** Show or hide the delay "hotspots" heatmap layer. */

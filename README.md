@@ -19,6 +19,9 @@ Everything runs in Docker; nothing is installed on the host.
 
 - **Live train movement** on a real geographic basemap (CARTO Voyager tiles),
   ~700 trains interpolated along real track geometry.
+- **NYC Ferry boats** shown live (distinct boat markers, dashed water routes,
+  ferry terminals), toggled on/off. Ferries use real GPS positions from the
+  feed and follow their route shape toward the next landing.
 - **3D tilted view** with a compass control (drag / right-click to rotate).
 - **Route-bullet markers**: trains are MTA-style colored bullets showing the
   route letter/number; **express** services render as diamonds.
@@ -116,6 +119,24 @@ track polylines the trains are interpolated along. It's downloaded once and
 cached as SQLite (see caching below). MTA updates it every few weeks.
 
 The URL can be overridden with the `GTFS_STATIC_URL` env var.
+
+### 4. NYC Ferry feeds — *boats* (no API key)
+
+NYC Ferry (operated via Connexionz) publishes standard GTFS + GTFS-realtime.
+Unlike the subway, the ferry realtime feed **includes real GPS coordinates**,
+so boats are placed exactly and slid along their route shape toward the next
+landing.
+
+- Static ZIP (built into the cache alongside MTA data, ids namespaced `F:`):
+  `http://nycferry.connexionz.net/rtt/public/utility/gtfs.aspx`
+  (override via `FERRY_STATIC_URL`).
+- Realtime (polled with the subway loop, parsed in
+  [`server/src/ferry.ts`](server/src/ferry.ts)):
+  - `…/gtfsrealtime.aspx/vehicleposition` — live boat GPS, heading, status, vessel label
+  - `…/gtfsrealtime.aspx/tripupdate` — predicted landing times
+
+Ferry data is namespaced with an `F:` id prefix and an `agency` column so it
+never collides with subway ids, and it carries `mode: "ferry"` on the wire.
 
 ---
 

@@ -26,6 +26,20 @@
         background: rgba(200,0,0,0.85); border-color: #ff6b6b;
         box-shadow: 0 0 10px rgba(255,40,40,0.6);
       }
+      #ferries-toggle {
+        position: absolute; top: 78px; left: 10px; z-index: 10;
+        background: rgba(0,0,0,0.65); color: #fff; border: 1px solid rgba(255,255,255,0.25);
+        padding: 6px 10px; border-radius: 6px; font-size: 13px; font-weight: 600;
+        cursor: pointer; font-family: inherit;
+      }
+      #ferries-toggle:hover { background: rgba(0,0,0,0.8); }
+      #ferries-toggle.active {
+        background: rgba(10,61,98,0.9); border-color: #4aa3df;
+      }
+      .tp-ferry {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 26px; height: 26px; border-radius: 6px; font-size: 15px; flex: none;
+      }
 
       /* Line legend */
       #legend {
@@ -227,6 +241,7 @@
     <div id="map"></div>
     <div id="hud">connecting…</div>
     <button id="hotspots-toggle" title="Show delay hotspots">Hotspots: Off</button>
+    <button id="ferries-toggle" title="Show NYC Ferry boats">Ferries: On</button>
     <div id="legend"><h4>Subway Lines</h4><div class="rows"></div></div>
     <div id="disclaimer">
       Live data from the

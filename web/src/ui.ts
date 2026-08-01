@@ -73,11 +73,12 @@ export function attachTrainPopup(
     maxWidth: "260px",
   });
 
-  map.on("click", "trains", (e) => {
+  const onClick = (e: maplibregl.MapLayerMouseEvent) => {
     const f = e.features?.[0];
     if (!f) return;
     const p = f.properties as Record<string, string>;
     const route = p.route ?? "?";
+    const isFerry = p.mode === "ferry";
     const color = colorFor(route);
     const status = (p.status as string) || "moving";
     const dest = p.dest || "—";
@@ -85,12 +86,15 @@ export function attachTrainPopup(
     const eta = Number(p.eta) || 0;
     const dly = Number(p.dly) || 0;
     const asOf = Number(p.asOf) || 0;
+    const label = p.label || "";
 
     const statusLabel =
       status === "stalled"
         ? "Delayed / not moving"
         : status === "stopped"
-          ? "At station"
+          ? isFerry
+            ? "At landing"
+            : "At station"
           : "In service";
 
     const coords = (f.geometry as GeoJSON.Point).coordinates.slice() as [
@@ -101,19 +105,24 @@ export function attachTrainPopup(
       dly >= 60
         ? `<div class="tp-row tp-delay">Delayed <b>${Math.round(dly / 60)} min</b>${asOf ? ` as of ${whenText(asOf)}` : ""}</div>`
         : "";
+    const head = isFerry
+      ? `<div class="tp-pop-head"><span class="tp-ferry" style="background:${color};color:${textOn(color)}">⛴</span>
+           <span class="tp-dest">${label ? `${label} · ` : ""}to ${dest}</span></div>`
+      : `<div class="tp-pop-head">${bulletHtml(route, color)}
+           <span class="tp-dest">to ${dest}</span></div>`;
     const html = `
-      <div class="tp-pop-head">
-        ${bulletHtml(route, color)}
-        <span class="tp-dest">to ${dest}</span>
-      </div>
-      <div class="tp-row">Next stop: <b>${ns}</b></div>
+      ${head}
+      <div class="tp-row">Next ${isFerry ? "landing" : "stop"}: <b>${ns}</b></div>
       <div class="tp-row">Arriving: <span class="tp-eta">${etaText(eta) || "—"}</span></div>
       ${delayRow}
       <div class="tp-status ${status}">${statusLabel}</div>
     `;
     popup.setLngLat(coords).setHTML(html).addTo(map);
-  });
+  };
 
-  map.on("mouseenter", "trains", () => (map.getCanvas().style.cursor = "pointer"));
-  map.on("mouseleave", "trains", () => (map.getCanvas().style.cursor = ""));
+  for (const layer of ["trains", "ferries"]) {
+    map.on("click", layer, onClick);
+    map.on("mouseenter", layer, () => (map.getCanvas().style.cursor = "pointer"));
+    map.on("mouseleave", layer, () => (map.getCanvas().style.cursor = ""));
+  }
 }

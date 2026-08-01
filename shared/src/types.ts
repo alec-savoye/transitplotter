@@ -40,6 +40,10 @@ export interface TrainLeg {
    * Drives the "hotspots" heatmap on the client.
    */
   dly?: number;
+  /** Transit mode. Absent = subway. */
+  mode?: "subway" | "ferry";
+  /** Vessel/vehicle label, e.g. ferry "H200". */
+  label?: string;
 }
 
 /** Message pushed from server to clients whenever the feed refreshes. */

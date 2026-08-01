@@ -25,6 +25,12 @@ const GTFS_STATIC_URL =
   process.env.GTFS_STATIC_URL ??
   "https://rrgtfsfeeds.s3.amazonaws.com/gtfs_supplemented.zip";
 
+// NYC Ferry static feed (Connexionz). Small; no key. Ids are namespaced with
+// an "F:" prefix at load time to avoid colliding with subway ids.
+const FERRY_STATIC_URL =
+  process.env.FERRY_STATIC_URL ??
+  "http://nycferry.connexionz.net/rtt/public/utility/gtfs.aspx";
+
 type Row = Record<string, string>;
 
 function csv(zip: AdmZip, name: string): Row[] {
@@ -69,20 +75,23 @@ async function main() {
       route_id TEXT PRIMARY KEY,
       route_short_name TEXT,
       route_long_name TEXT,
-      route_color TEXT
+      route_color TEXT,
+      agency TEXT
     );
     CREATE TABLE stops (
       stop_id TEXT PRIMARY KEY,
       stop_name TEXT,
       stop_lat REAL,
       stop_lon REAL,
-      parent_station TEXT
+      parent_station TEXT,
+      agency TEXT
     );
     CREATE TABLE trips (
       trip_id TEXT PRIMARY KEY,
       route_id TEXT,
       shape_id TEXT,
-      direction_id INTEGER
+      direction_id INTEGER,
+      agency TEXT
     );
     CREATE TABLE shapes (
       shape_id TEXT,
@@ -105,77 +114,6 @@ async function main() {
 
   const tx = db.transaction((fn: () => void) => fn());
 
-  // --- routes ---------------------------------------------------------------
-  const routes = csv(zip, "routes.txt");
-  const insRoute = db.prepare(
-    `INSERT OR REPLACE INTO routes VALUES (@route_id,@route_short_name,@route_long_name,@route_color)`
-  );
-  tx(() => {
-    for (const r of routes) {
-      insRoute.run({
-        route_id: r.route_id,
-        route_short_name: r.route_short_name ?? "",
-        route_long_name: r.route_long_name ?? "",
-        route_color: r.route_color ?? "",
-      });
-    }
-  });
-  console.log(`  routes: ${routes.length}`);
-
-  // --- stops ----------------------------------------------------------------
-  const stops = csv(zip, "stops.txt");
-  const insStop = db.prepare(
-    `INSERT OR REPLACE INTO stops VALUES (@stop_id,@stop_name,@stop_lat,@stop_lon,@parent_station)`
-  );
-  tx(() => {
-    for (const s of stops) {
-      insStop.run({
-        stop_id: s.stop_id,
-        stop_name: s.stop_name ?? "",
-        stop_lat: s.stop_lat ? Number(s.stop_lat) : null,
-        stop_lon: s.stop_lon ? Number(s.stop_lon) : null,
-        parent_station: s.parent_station ?? "",
-      });
-    }
-  });
-  console.log(`  stops: ${stops.length}`);
-
-  // --- trips ----------------------------------------------------------------
-  const trips = csv(zip, "trips.txt");
-  const insTrip = db.prepare(
-    `INSERT OR REPLACE INTO trips VALUES (@trip_id,@route_id,@shape_id,@direction_id)`
-  );
-  tx(() => {
-    for (const t of trips) {
-      insTrip.run({
-        trip_id: t.trip_id,
-        route_id: t.route_id,
-        shape_id: t.shape_id ?? "",
-        direction_id: t.direction_id ? Number(t.direction_id) : null,
-      });
-    }
-  });
-  console.log(`  trips: ${trips.length}`);
-
-  // --- shapes ---------------------------------------------------------------
-  const shapes = csv(zip, "shapes.txt");
-  const insShape = db.prepare(
-    `INSERT INTO shapes VALUES (@shape_id,@seq,@lat,@lon,@dist)`
-  );
-  tx(() => {
-    for (const s of shapes) {
-      insShape.run({
-        shape_id: s.shape_id,
-        seq: Number(s.shape_pt_sequence),
-        lat: Number(s.shape_pt_lat),
-        lon: Number(s.shape_pt_lon),
-        dist: s.shape_dist_traveled ? Number(s.shape_dist_traveled) : null,
-      });
-    }
-  });
-  console.log(`  shape points: ${shapes.length}`);
-
-  // --- stop_times -----------------------------------------------------------
   // GTFS times can exceed 24:00:00 (service past midnight). Parse to seconds.
   const hms = (t: string | undefined): number | null => {
     if (!t) return null;
@@ -183,23 +121,117 @@ async function main() {
     if (!m) return null;
     return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
   };
-  const stopTimes = csv(zip, "stop_times.txt");
+
+  const insRoute = db.prepare(
+    `INSERT OR REPLACE INTO routes VALUES (@route_id,@route_short_name,@route_long_name,@route_color,@agency)`
+  );
+  const insStop = db.prepare(
+    `INSERT OR REPLACE INTO stops VALUES (@stop_id,@stop_name,@stop_lat,@stop_lon,@parent_station,@agency)`
+  );
+  const insTrip = db.prepare(
+    `INSERT OR REPLACE INTO trips VALUES (@trip_id,@route_id,@shape_id,@direction_id,@agency)`
+  );
+  const insShape = db.prepare(
+    `INSERT INTO shapes VALUES (@shape_id,@seq,@lat,@lon,@dist)`
+  );
   const insST = db.prepare(
     `INSERT INTO stop_times VALUES (@trip_id,@stop_id,@seq,@shape_dist,@arr,@dep)`
   );
-  tx(() => {
-    for (const st of stopTimes) {
-      insST.run({
-        trip_id: st.trip_id,
-        stop_id: st.stop_id,
-        seq: Number(st.stop_sequence),
-        shape_dist: st.shape_dist_traveled ? Number(st.shape_dist_traveled) : null,
-        arr: hms(st.arrival_time),
-        dep: hms(st.departure_time),
-      });
-    }
-  });
-  console.log(`  stop_times: ${stopTimes.length}`);
+
+  /**
+   * Ingest one GTFS feed. `prefix` namespaces all ids (e.g. "F:") so feeds from
+   * different agencies never collide; `agency` tags each row for filtering.
+   */
+  function ingest(feedZip: AdmZip, agency: string, prefix: string) {
+    const P = (id: string) => (id ? `${prefix}${id}` : id);
+
+    const routes = csv(feedZip, "routes.txt");
+    tx(() => {
+      for (const r of routes) {
+        insRoute.run({
+          route_id: P(r.route_id),
+          route_short_name: r.route_short_name ?? "",
+          route_long_name: r.route_long_name ?? "",
+          route_color: r.route_color ?? "",
+          agency,
+        });
+      }
+    });
+
+    const stops = csv(feedZip, "stops.txt");
+    tx(() => {
+      for (const s of stops) {
+        insStop.run({
+          stop_id: P(s.stop_id),
+          stop_name: s.stop_name ?? "",
+          stop_lat: s.stop_lat ? Number(s.stop_lat) : null,
+          stop_lon: s.stop_lon ? Number(s.stop_lon) : null,
+          parent_station: s.parent_station ? P(s.parent_station) : "",
+          agency,
+        });
+      }
+    });
+
+    const trips = csv(feedZip, "trips.txt");
+    tx(() => {
+      for (const t of trips) {
+        insTrip.run({
+          trip_id: P(t.trip_id),
+          route_id: P(t.route_id),
+          shape_id: t.shape_id ? P(t.shape_id) : "",
+          direction_id: t.direction_id ? Number(t.direction_id) : null,
+          agency,
+        });
+      }
+    });
+
+    const shapes = csv(feedZip, "shapes.txt");
+    tx(() => {
+      for (const s of shapes) {
+        insShape.run({
+          shape_id: P(s.shape_id),
+          seq: Number(s.shape_pt_sequence),
+          lat: Number(s.shape_pt_lat),
+          lon: Number(s.shape_pt_lon),
+          dist: s.shape_dist_traveled ? Number(s.shape_dist_traveled) : null,
+        });
+      }
+    });
+
+    const stopTimes = csv(feedZip, "stop_times.txt");
+    tx(() => {
+      for (const st of stopTimes) {
+        insST.run({
+          trip_id: P(st.trip_id),
+          stop_id: P(st.stop_id),
+          seq: Number(st.stop_sequence),
+          shape_dist: st.shape_dist_traveled ? Number(st.shape_dist_traveled) : null,
+          arr: hms(st.arrival_time),
+          dep: hms(st.departure_time),
+        });
+      }
+    });
+
+    console.log(
+      `  [${agency}] routes ${routes.length}, stops ${stops.length}, ` +
+        `trips ${trips.length}, shape pts ${shapes.length}, stop_times ${stopTimes.length}`
+    );
+  }
+
+  // Subway/rail (no prefix — keeps existing ids stable).
+  ingest(zip, "subway", "");
+
+  // NYC Ferry (namespaced).
+  try {
+    console.log(`Downloading NYC Ferry static from ${FERRY_STATIC_URL} ...`);
+    const fres = await fetch(FERRY_STATIC_URL);
+    if (!fres.ok) throw new Error(`${fres.status} ${fres.statusText}`);
+    const fbuf = Buffer.from(await fres.arrayBuffer());
+    console.log(`  downloaded ${(fbuf.length / 1e3).toFixed(0)} KB`);
+    ingest(new AdmZip(fbuf), "ferry", "F:");
+  } catch (e) {
+    console.warn(`  ! ferry static download failed, continuing without it:`, e);
+  }
 
   db.close();
   console.log(`\nDone -> ${DB_PATH}`);

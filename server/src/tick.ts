@@ -14,6 +14,7 @@ import { POLL_INTERVAL_MS, ALERTS_POLL_INTERVAL_MS } from "./feeds.js";
 import type { Broadcaster } from "./ws.js";
 import { FeedStore } from "./feedstore.js";
 import { fetchAlerts } from "./alerts.js";
+import { fetchFerryLegs } from "./ferry.js";
 import type { RoutingGraph } from "./routing/graph.js";
 
 export function startLoops(
@@ -27,9 +28,20 @@ export function startLoops(
       const feed = await fetchAllFeeds();
       feedStore.set(feed); // keep latest feed for arrivals lookups
       const active = buildActiveLegs(feed, stat);
-      const legs = buildTrainLegs(active, graph);
+
+      // Ferries (GPS-based); tolerate failures without dropping subway data.
+      let ferry: typeof active = [];
+      try {
+        ferry = await fetchFerryLegs(stat);
+      } catch (e) {
+        console.error("ferry poll error", e);
+      }
+
+      const legs = buildTrainLegs([...active, ...ferry], graph);
       broadcaster.broadcast({ t: Date.now(), legs });
-      console.log(`polled feeds: ${feed.length} trips -> ${legs.length} legs broadcast`);
+      console.log(
+        `polled feeds: ${feed.length} subway trips + ${ferry.length} ferries -> ${legs.length} legs`
+      );
     } catch (e) {
       console.error("poll error", e);
     }

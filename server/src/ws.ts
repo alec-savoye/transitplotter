@@ -173,13 +173,41 @@ function buildRoutesGeoJson(stat: StaticData): GeoJSON.FeatureCollection {
     const color = stat.routes.get(routeId)?.color ?? "#888888";
     features.push({
       type: "Feature",
-      properties: { route: routeId, color },
+      properties: { route: routeId, color, mode: "subway" },
       geometry: {
         type: "LineString",
         coordinates: line.shape.points.map((p) => [p.lon, p.lat]),
       },
     });
   }
+
+  // Ferry route lines: ferries have no N/S direction, so pick the longest shape
+  // per ferry route id straight from trips -> shapes.
+  const ferryShapeByRoute = new Map<string, string>();
+  for (const trip of stat.trips.values()) {
+    if (stat.routeAgency.get(trip.routeId) !== "ferry" || !trip.shapeId) continue;
+    const cur = ferryShapeByRoute.get(trip.routeId);
+    const curLen = cur ? stat.shapes.get(cur)?.length ?? 0 : -1;
+    const thisLen = stat.shapes.get(trip.shapeId)?.length ?? 0;
+    if (thisLen > curLen) ferryShapeByRoute.set(trip.routeId, trip.shapeId);
+  }
+  for (const [routeId, shapeId] of ferryShapeByRoute) {
+    const shape = stat.shapes.get(shapeId);
+    if (!shape) continue;
+    features.push({
+      type: "Feature",
+      properties: {
+        route: routeId,
+        color: stat.routes.get(routeId)?.color ?? "#0a3d62",
+        mode: "ferry",
+      },
+      geometry: {
+        type: "LineString",
+        coordinates: shape.points.map((p) => [p.lon, p.lat]),
+      },
+    });
+  }
+
   return { type: "FeatureCollection", features };
 }
 
@@ -206,10 +234,14 @@ function buildStationsGeoJson(stat: StaticData): GeoJSON.FeatureCollection {
     if (seen.has(base)) continue;
     seen.add(base);
 
+    // Ferry terminals aren't part of the subway canonical lines; tag by id.
+    const isFerry = s.id.startsWith("F:");
+
     const routeIds = [...(routesByStation.get(base) ?? [])].sort();
-    // Pick the first serving route's color as the pin color.
     const primary = routeIds[0];
-    const color = (primary && stat.routes.get(primary)?.color) || "#0b60d6";
+    const color = isFerry
+      ? "#0a3d62"
+      : (primary && stat.routes.get(primary)?.color) || "#0b60d6";
 
     features.push({
       type: "Feature",
@@ -218,6 +250,7 @@ function buildStationsGeoJson(stat: StaticData): GeoJSON.FeatureCollection {
         name: s.name,
         routes: routeIds.join(""), // e.g. "456"
         color,
+        mode: isFerry ? "ferry" : "subway",
       },
       geometry: { type: "Point", coordinates: [s.lon, s.lat] },
     });

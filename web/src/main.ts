@@ -1,7 +1,7 @@
 import "maplibre-gl/dist/maplibre-gl.css";
 import type maplibregl from "maplibre-gl";
 import type { ServerMessage, RouteMeta } from "@transitplotter/shared";
-import { createMap, addLayers, setDisruptedRoutes, setHotspotsVisible } from "./basemap.js";
+import { createMap, addLayers, setDisruptedRoutes, setHotspotsVisible, setFerriesVisible } from "./basemap.js";
 import { TrainLayer } from "./trains.js";
 import { buildLegend, attachTrainPopup } from "./ui.js";
 import { StationPanel } from "./station.js";
@@ -51,7 +51,27 @@ async function main() {
   // Click a hotspot cloud to see why it's flagged (delayed trains summary).
   attachHotspotSummary(map, trainLayer, colorFor, isHotspotsOn);
 
+  // "Ferries" toggle — show/hide NYC Ferry boats.
+  setupFerriesToggle(map);
+
   connect(trainLayer);
+}
+
+/** Wires the ferries on/off toggle button (ferries start visible). */
+function setupFerriesToggle(map: maplibregl.Map) {
+  const btn = document.getElementById("ferries-toggle");
+  if (!btn) return;
+  let on = true;
+  const render = () => {
+    setFerriesVisible(map, on);
+    btn.classList.toggle("active", on);
+    btn.textContent = on ? "Ferries: On" : "Ferries: Off";
+  };
+  btn.addEventListener("click", () => {
+    on = !on;
+    render();
+  });
+  render();
 }
 
 /** Wires the toggle button; returns a getter for the current on/off state. */
