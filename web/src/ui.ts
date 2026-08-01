@@ -20,6 +20,8 @@ export function buildLegend(routes: RouteMeta[]) {
   // De-dup by label+color so 6/6X don't both show; show base services only.
   const seen = new Set<string>();
   for (const r of routes) {
+    // Subway only — buses ("B:") and ferries ("F:") would flood the legend.
+    if (r.id.startsWith("B:") || r.id.startsWith("F:")) continue;
     if (isExpress(r.id)) continue; // legend shows base services
     const label = bulletLabel(r.id);
     if (seen.has(label)) continue;
@@ -79,6 +81,7 @@ export function attachTrainPopup(
     const p = f.properties as Record<string, string>;
     const route = p.route ?? "?";
     const isFerry = p.mode === "ferry";
+    const isBus = p.mode === "bus";
     const color = colorFor(route);
     const status = (p.status as string) || "moving";
     const dest = p.dest || "—";
@@ -105,14 +108,19 @@ export function attachTrainPopup(
       dly >= 60
         ? `<div class="tp-row tp-delay">Delayed <b>${Math.round(dly / 60)} min</b>${asOf ? ` as of ${whenText(asOf)}` : ""}</div>`
         : "";
+    const busLabel = (route || "").replace(/^B:/, "");
     const head = isFerry
       ? `<div class="tp-pop-head"><span class="tp-ferry" style="background:${color};color:${textOn(color)}">⛴</span>
            <span class="tp-dest">${label ? `${label} · ` : ""}to ${dest}</span></div>`
-      : `<div class="tp-pop-head">${bulletHtml(route, color)}
-           <span class="tp-dest">to ${dest}</span></div>`;
+      : isBus
+        ? `<div class="tp-pop-head"><span class="tp-busbadge" style="background:${color};color:${textOn(color)}">${busLabel}</span>
+             <span class="tp-dest">to ${dest}</span></div>`
+        : `<div class="tp-pop-head">${bulletHtml(route, color)}
+             <span class="tp-dest">to ${dest}</span></div>`;
+    const nextLabel = isFerry ? "landing" : "stop";
     const html = `
       ${head}
-      <div class="tp-row">Next ${isFerry ? "landing" : "stop"}: <b>${ns}</b></div>
+      <div class="tp-row">Next ${nextLabel}: <b>${ns}</b></div>
       <div class="tp-row">Arriving: <span class="tp-eta">${etaText(eta) || "—"}</span></div>
       ${delayRow}
       <div class="tp-status ${status}">${statusLabel}</div>
@@ -120,7 +128,7 @@ export function attachTrainPopup(
     popup.setLngLat(coords).setHTML(html).addTo(map);
   };
 
-  for (const layer of ["trains", "ferries"]) {
+  for (const layer of ["trains", "ferries", "buses"]) {
     map.on("click", layer, onClick);
     map.on("mouseenter", layer, () => (map.getCanvas().style.cursor = "pointer"));
     map.on("mouseleave", layer, () => (map.getCanvas().style.cursor = ""));

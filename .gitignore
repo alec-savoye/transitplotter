@@ -6,3 +6,6 @@ dist/
 # and is never committed. Local fallback cache dir also ignored.
 .cache/
 data/
+
+# local secrets (API keys)
+.env

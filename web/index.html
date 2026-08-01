@@ -3,42 +3,88 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>TransitPlotter — Live NYC Subway</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>TransitPlotter</title>
     <style>
       html, body, #map { margin: 0; height: 100%; width: 100%; }
       body { background: #1a1a1a; font-family: system-ui, sans-serif; }
 
       #hud {
         position: absolute; top: 10px; left: 10px; z-index: 10;
-        background: rgba(0,0,0,0.65); color: #fff; padding: 6px 10px;
-        border-radius: 6px; font-size: 13px; font-weight: 600;
+        background: rgba(0,0,0,0.7); color: #fff; padding: 8px 11px;
+        border-radius: 8px; font-size: 12px; line-height: 1.35;
+        min-width: 150px; box-shadow: 0 1px 6px rgba(0,0,0,0.35);
       }
+      .hud-status { font-weight: 700; font-size: 13px; margin-bottom: 3px; }
+      .hud-status.live { color: #4ade80; }
+      .hud-status.connecting { color: #fbbf24; }
+      .hud-status.down { color: #f87171; }
+      .hud-line { font-size: 13px; }
+      .hud-line b { font-size: 15px; }
+      .hud-modes {
+        display: flex; gap: 10px; margin: 4px 0 2px; font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+      .hud-sub { color: #cbd5e1; font-size: 11px; }
 
-      /* Hotspots toggle */
-      #hotspots-toggle {
-        position: absolute; top: 44px; left: 10px; z-index: 10;
+      /* Stacked control panel (top-left, under the HUD) */
+      #controls {
+        position: absolute; top: 148px; left: 10px; z-index: 10;
+        display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
+        max-width: 190px;
+      }
+      /* Shared toggle-button style (matches the original look). */
+      .ctl-btn {
         background: rgba(0,0,0,0.65); color: #fff; border: 1px solid rgba(255,255,255,0.25);
         padding: 6px 10px; border-radius: 6px; font-size: 13px; font-weight: 600;
-        cursor: pointer; font-family: inherit;
+        cursor: pointer; font-family: inherit; text-align: left; width: 100%;
+        box-sizing: border-box;
       }
-      #hotspots-toggle:hover { background: rgba(0,0,0,0.8); }
+      .ctl-btn:hover { background: rgba(0,0,0,0.8); }
+
       #hotspots-toggle.active {
         background: rgba(200,0,0,0.85); border-color: #ff6b6b;
         box-shadow: 0 0 10px rgba(255,40,40,0.6);
       }
-      #ferries-toggle {
-        position: absolute; top: 78px; left: 10px; z-index: 10;
-        background: rgba(0,0,0,0.65); color: #fff; border: 1px solid rgba(255,255,255,0.25);
-        padding: 6px 10px; border-radius: 6px; font-size: 13px; font-weight: 600;
-        cursor: pointer; font-family: inherit;
-      }
-      #ferries-toggle:hover { background: rgba(0,0,0,0.8); }
       #ferries-toggle.active {
         background: rgba(10,61,98,0.9); border-color: #4aa3df;
       }
+      #trackrecords-toggle.active {
+        background: rgba(20,120,60,0.9); border-color: #6ee7a0;
+        box-shadow: 0 0 10px rgba(46,204,64,0.5);
+      }
+
+      /* Buses group */
+      #bus-group {
+        background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 6px; padding: 6px; width: 100%; box-sizing: border-box;
+      }
+      #bus-group .bg-title {
+        font-size: 13px; font-weight: 700; color: #fff; margin-bottom: 5px;
+      }
+      .bus-boro {
+        display: block; width: 100%; box-sizing: border-box; text-align: left;
+        background: rgba(255,255,255,0.08); color: #cfe6ff;
+        border: 1px solid rgba(255,255,255,0.15); border-radius: 5px;
+        padding: 4px 8px; margin-bottom: 4px; font-size: 12px; font-weight: 600;
+        cursor: pointer; font-family: inherit;
+      }
+      .bus-boro:hover { background: rgba(255,255,255,0.16); }
+      .bus-boro.active {
+        background: rgba(27,127,196,0.9); color: #fff; border-color: #7cc4f2;
+      }
+      .bus-zoom { margin-top: 4px; color: #fff; font-size: 11px; }
+      .bus-zoom label { display: block; margin-bottom: 2px; opacity: 0.85; }
+      .bus-zoom input[type="range"] { width: 100%; }
+
       .tp-ferry {
         display: inline-flex; align-items: center; justify-content: center;
         width: 26px; height: 26px; border-radius: 6px; font-size: 15px; flex: none;
+      }
+      .tp-busbadge {
+        display: inline-flex; align-items: center; justify-content: center;
+        min-width: 34px; height: 20px; padding: 0 6px; border-radius: 6px;
+        font-size: 12px; font-weight: 700; flex: none;
       }
 
       /* Line legend */
@@ -96,6 +142,44 @@
       }
       .hs-bullet.exp { border-radius: 4px; transform: rotate(45deg); }
       .hs-bullet.exp span { transform: rotate(-45deg); }
+
+      /* Track-record cell rationale popup */
+      .tr-head {
+        font-weight: 800; font-size: 14px; margin-bottom: 6px; padding-left: 8px;
+        border-left: 4px solid #888; display: flex; align-items: center; gap: 6px;
+      }
+      .tr-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+      .tr-stats { font-size: 12px; line-height: 1.4; margin-bottom: 8px; }
+      .tr-rows { }
+      .tr-row { display: flex; justify-content: space-between; gap: 10px; padding: 4px 0; border-top: 1px solid #eee; font-size: 12px; }
+      .tr-mode { font-weight: 700; flex: none; }
+      .tr-nums { text-align: right; }
+      .tr-sub { color: #777; font-weight: 400; }
+      .tr-foot { font-size: 11px; color: #888; margin-top: 8px; font-style: italic; }
+
+      /* "Collecting data" modal for track records */
+      #tr-modal {
+        position: absolute; inset: 0; z-index: 40; display: none;
+        align-items: center; justify-content: center;
+        background: rgba(0,0,0,0.5);
+      }
+      #tr-modal.show { display: flex; }
+      #tr-modal .tr-card {
+        background: #fff; color: #111; border-radius: 12px; padding: 20px 22px;
+        max-width: 340px; width: 85%; box-shadow: 0 6px 30px rgba(0,0,0,0.5);
+        font-family: system-ui, sans-serif;
+      }
+      #tr-modal h3 { margin: 0 0 8px; font-size: 17px; }
+      #tr-modal .tr-prog { font-size: 13px; line-height: 1.5; margin-bottom: 10px; }
+      #tr-modal .tr-bar {
+        height: 8px; border-radius: 4px; background: #e6e6e6; overflow: hidden; margin: 8px 0 12px;
+      }
+      #tr-modal .tr-bar > span { display: block; height: 100%; background: #2ecc40; }
+      #tr-modal .tr-break { font-size: 12px; color: #444; line-height: 1.5; }
+      #tr-modal .tr-close {
+        margin-top: 14px; width: 100%; padding: 8px; border: none; border-radius: 6px;
+        background: #147a3c; color: #fff; font-weight: 700; font-size: 13px; cursor: pointer;
+      }
 
       /* Station arrivals panel */
       #station-panel {
@@ -226,6 +310,13 @@
       .al-effect { font-weight: 700; font-size: 12px; color: #555; }
       .al-header { font-size: 13px; line-height: 1.35; }
       .al-empty { padding: 16px; color: #888; }
+      .al-bus { border-top: 1px solid #ddd; }
+      .al-bus > summary {
+        cursor: pointer; padding: 10px 14px; font-weight: 700; font-size: 13px;
+        color: #1b7fc4; background: #f4f9fd; user-select: none;
+      }
+      .al-bus > summary:hover { background: #e9f3fb; }
+      .al-bus[open] > summary { border-bottom: 1px solid #eee; }
 
       /* Attribution / disclaimer footer */
       #disclaimer {
@@ -239,9 +330,33 @@
   </head>
   <body>
     <div id="map"></div>
-    <div id="hud">connecting…</div>
-    <button id="hotspots-toggle" title="Show delay hotspots">Hotspots: Off</button>
-    <button id="ferries-toggle" title="Show NYC Ferry boats">Ferries: On</button>
+    <div id="hud"><div class="hud-status connecting">● Connecting…</div></div>
+    <div id="controls">
+      <button id="hotspots-toggle" class="ctl-btn" title="Show delay hotspots">Hotspots: Off</button>
+      <button id="trackrecords-toggle" class="ctl-btn" title="Show reliability track records">Track Records: Off</button>
+      <button id="ferries-toggle" class="ctl-btn" title="Show NYC Ferry boats">Ferries: On</button>
+      <div id="bus-group">
+        <div class="bg-title">Buses</div>
+        <button class="bus-boro active" data-boro="manhattan">Manhattan</button>
+        <button class="bus-boro active" data-boro="brooklyn">Brooklyn</button>
+        <button class="bus-boro" data-boro="bronx">Bronx</button>
+        <button class="bus-boro" data-boro="queens">Queens</button>
+        <button class="bus-boro" data-boro="statenisland">Staten Island</button>
+        <div class="bus-zoom">
+          <label>Show buses at zoom ≥ <span id="bus-zoom-val">13.5</span></label>
+          <input id="bus-zoom" type="range" min="11" max="16" step="0.5" value="13.5" />
+        </div>
+      </div>
+    </div>
+    <div id="tr-modal">
+      <div class="tr-card">
+        <h3>Collecting data…</h3>
+        <div class="tr-prog"></div>
+        <div class="tr-bar"><span></span></div>
+        <div class="tr-break"></div>
+        <button class="tr-close" type="button">Got it</button>
+      </div>
+    </div>
     <div id="legend"><h4>Subway Lines</h4><div class="rows"></div></div>
     <div id="disclaimer">
       Live data from the

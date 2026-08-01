@@ -143,13 +143,62 @@ export function registerFerry(map: maplibregl.Map, route: RouteMeta) {
   map.addImage(id, img, { pixelRatio: scale });
 }
 
+export const BUS_PREFIX = "bus-";
+
+/**
+ * Register a bus marker: a small rounded badge in the route color with the
+ * route label, distinct from circular train bullets and square ferry badges.
+ * One image per bus route id.
+ */
+export function registerBus(map: maplibregl.Map, route: RouteMeta) {
+  const id = `${BUS_PREFIX}${route.id}`;
+  if (map.hasImage(id)) return;
+
+  const scale = 3;
+  const w = 34;
+  const h = 18;
+  const canvas = document.createElement("canvas");
+  canvas.width = w * scale;
+  canvas.height = h * scale;
+  const ctx = canvas.getContext("2d")!;
+  ctx.scale(scale, scale);
+
+  const color = route.color || "#1b7fc4";
+  const r = 5;
+  // rounded pill
+  ctx.beginPath();
+  ctx.moveTo(r, 1);
+  ctx.arcTo(w - 1, 1, w - 1, h - 1, r);
+  ctx.arcTo(w - 1, h - 1, 1, h - 1, r);
+  ctx.arcTo(1, h - 1, 1, 1, r);
+  ctx.arcTo(1, 1, w - 1, 1, r);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 1.5;
+  ctx.fill();
+  ctx.stroke();
+
+  const label = bulletLabel(route.id).replace(/^B:/, "");
+  ctx.fillStyle = textColorFor(color);
+  ctx.font = `bold ${label.length > 4 ? 8 : 10}px system-ui, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(label, w / 2, h / 2 + 0.5);
+
+  const img = ctx.getImageData(0, 0, w * scale, h * scale);
+  map.addImage(id, img, { pixelRatio: scale });
+}
+
 /** Register bullets for all known routes, plus a neutral fallback. */
 export function registerAllBullets(map: maplibregl.Map, routes: RouteMeta[]) {
   for (const r of routes) {
-    registerBullet(map, r);
     if (r.id.startsWith("F:")) registerFerry(map, r);
+    else if (r.id.startsWith("B:")) registerBus(map, r);
+    else registerBullet(map, r);
   }
-  // fallback bullet for unknown routes
+  // fallback markers for unknown routes
   registerBullet(map, { id: "?", color: "#666666", name: "Unknown" });
   registerFerry(map, { id: "?", color: "#0a3d62", name: "Ferry" });
+  registerBus(map, { id: "?", color: "#1b7fc4", name: "Bus" });
 }

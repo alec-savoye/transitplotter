@@ -87,20 +87,24 @@ export function buildTrainLegs(legs: ActiveLeg[], graph: RoutingGraph): TrainLeg
       d1 = d0 + minDuration;
     }
 
-    // Delay estimate: predicted leg duration minus the typical (median) time
-    // for this route segment. Positive means the train is running slow. Use the
-    // *original* predicted span, not the clamped one.
+    // Delay estimate. Prefer a feed-reported delay (buses supply arrival.delay);
+    // otherwise estimate from the typical (median) segment time (subway, which
+    // has no direct delay field). Ferries carry neither, so they stay 0.
     let dly: number | undefined;
-    const typical = typicalSeconds(
-      graph,
-      leg.routeId,
-      baseStop(leg.fromStopId),
-      baseStop(leg.toStopId)
-    );
-    if (typical != null) {
-      const predicted = leg.arriveTs - leg.departTs;
-      const d = Math.round(predicted - typical);
-      if (d > 0) dly = d;
+    if (leg.delaySec != null) {
+      if (leg.delaySec > 0) dly = Math.round(leg.delaySec);
+    } else {
+      const typical = typicalSeconds(
+        graph,
+        leg.routeId,
+        baseStop(leg.fromStopId),
+        baseStop(leg.toStopId)
+      );
+      if (typical != null) {
+        const predicted = leg.arriveTs - leg.departTs;
+        const d = Math.round(predicted - typical);
+        if (d > 0) dly = d;
+      }
     }
 
     out.push({
@@ -115,6 +119,7 @@ export function buildTrainLegs(legs: ActiveLeg[], graph: RoutingGraph): TrainLeg
       dly,
       mode: leg.mode && leg.mode !== "subway" ? leg.mode : undefined,
       label: leg.label || undefined,
+      boro: leg.boro || undefined,
     });
   }
   return out;

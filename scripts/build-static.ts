@@ -31,6 +31,12 @@ const FERRY_STATIC_URL =
   process.env.FERRY_STATIC_URL ??
   "http://nycferry.connexionz.net/rtt/public/utility/gtfs.aspx";
 
+// MTA Bus static feeds, one ZIP per borough. Ids namespaced with "B:". We only
+// ingest routes/stops/trips (not stop_times/shapes) since the bus realtime
+// feed provides GPS + stopId directly — keeps the cache small.
+const BUS_STATIC_BASE = "http://web.mta.info/developers/data/nyct/bus";
+const BUS_BOROUGHS = ["bronx", "brooklyn", "manhattan", "queens", "staten_island"];
+
 type Row = Record<string, string>;
 
 function csv(zip: AdmZip, name: string): Row[] {
@@ -91,7 +97,8 @@ async function main() {
       route_id TEXT,
       shape_id TEXT,
       direction_id INTEGER,
-      agency TEXT
+      agency TEXT,
+      headsign TEXT
     );
     CREATE TABLE shapes (
       shape_id TEXT,
@@ -129,7 +136,7 @@ async function main() {
     `INSERT OR REPLACE INTO stops VALUES (@stop_id,@stop_name,@stop_lat,@stop_lon,@parent_station,@agency)`
   );
   const insTrip = db.prepare(
-    `INSERT OR REPLACE INTO trips VALUES (@trip_id,@route_id,@shape_id,@direction_id,@agency)`
+    `INSERT OR REPLACE INTO trips VALUES (@trip_id,@route_id,@shape_id,@direction_id,@agency,@headsign)`
   );
   const insShape = db.prepare(
     `INSERT INTO shapes VALUES (@shape_id,@seq,@lat,@lon,@dist)`
@@ -141,8 +148,16 @@ async function main() {
   /**
    * Ingest one GTFS feed. `prefix` namespaces all ids (e.g. "F:") so feeds from
    * different agencies never collide; `agency` tags each row for filtering.
+   * `opts.geometry=false` skips shapes + stop_times (used for buses, whose
+   * realtime feed supplies GPS + stopId directly).
    */
-  function ingest(feedZip: AdmZip, agency: string, prefix: string) {
+  function ingest(
+    feedZip: AdmZip,
+    agency: string,
+    prefix: string,
+    opts: { geometry?: boolean } = {}
+  ) {
+    const geometry = opts.geometry !== false;
     const P = (id: string) => (id ? `${prefix}${id}` : id);
 
     const routes = csv(feedZip, "routes.txt");
@@ -181,40 +196,47 @@ async function main() {
           shape_id: t.shape_id ? P(t.shape_id) : "",
           direction_id: t.direction_id ? Number(t.direction_id) : null,
           agency,
+          headsign: t.trip_headsign ?? "",
         });
       }
     });
 
-    const shapes = csv(feedZip, "shapes.txt");
-    tx(() => {
-      for (const s of shapes) {
-        insShape.run({
-          shape_id: P(s.shape_id),
-          seq: Number(s.shape_pt_sequence),
-          lat: Number(s.shape_pt_lat),
-          lon: Number(s.shape_pt_lon),
-          dist: s.shape_dist_traveled ? Number(s.shape_dist_traveled) : null,
-        });
-      }
-    });
+    let shapesLen = 0;
+    let stopTimesLen = 0;
+    if (geometry) {
+      const shapes = csv(feedZip, "shapes.txt");
+      shapesLen = shapes.length;
+      tx(() => {
+        for (const s of shapes) {
+          insShape.run({
+            shape_id: P(s.shape_id),
+            seq: Number(s.shape_pt_sequence),
+            lat: Number(s.shape_pt_lat),
+            lon: Number(s.shape_pt_lon),
+            dist: s.shape_dist_traveled ? Number(s.shape_dist_traveled) : null,
+          });
+        }
+      });
 
-    const stopTimes = csv(feedZip, "stop_times.txt");
-    tx(() => {
-      for (const st of stopTimes) {
-        insST.run({
-          trip_id: P(st.trip_id),
-          stop_id: P(st.stop_id),
-          seq: Number(st.stop_sequence),
-          shape_dist: st.shape_dist_traveled ? Number(st.shape_dist_traveled) : null,
-          arr: hms(st.arrival_time),
-          dep: hms(st.departure_time),
-        });
-      }
-    });
+      const stopTimes = csv(feedZip, "stop_times.txt");
+      stopTimesLen = stopTimes.length;
+      tx(() => {
+        for (const st of stopTimes) {
+          insST.run({
+            trip_id: P(st.trip_id),
+            stop_id: P(st.stop_id),
+            seq: Number(st.stop_sequence),
+            shape_dist: st.shape_dist_traveled ? Number(st.shape_dist_traveled) : null,
+            arr: hms(st.arrival_time),
+            dep: hms(st.departure_time),
+          });
+        }
+      });
+    }
 
     console.log(
       `  [${agency}] routes ${routes.length}, stops ${stops.length}, ` +
-        `trips ${trips.length}, shape pts ${shapes.length}, stop_times ${stopTimes.length}`
+        `trips ${trips.length}, shape pts ${shapesLen}, stop_times ${stopTimesLen}`
     );
   }
 
@@ -231,6 +253,23 @@ async function main() {
     ingest(new AdmZip(fbuf), "ferry", "F:");
   } catch (e) {
     console.warn(`  ! ferry static download failed, continuing without it:`, e);
+  }
+
+  // MTA Bus (5 boroughs, namespaced "B:"). Routes/stops/trips only — the bus
+  // realtime feed supplies GPS + stopId so we skip stop_times/shapes.
+  for (const boro of BUS_BOROUGHS) {
+    try {
+      const url = `${BUS_STATIC_BASE}/google_transit_${boro}.zip`;
+      console.log(`Downloading MTA Bus (${boro}) from ${url} ...`);
+      const bres = await fetch(url);
+      if (!bres.ok) throw new Error(`${bres.status} ${bres.statusText}`);
+      const bbuf = Buffer.from(await bres.arrayBuffer());
+      console.log(`  downloaded ${(bbuf.length / 1e6).toFixed(1)} MB`);
+      // route_id is shared across borough ZIPs; INSERT OR REPLACE dedups.
+      ingest(new AdmZip(bbuf), "bus", "B:", { geometry: false });
+    } catch (e) {
+      console.warn(`  ! bus static (${boro}) failed, continuing:`, e);
+    }
   }
 
   db.close();

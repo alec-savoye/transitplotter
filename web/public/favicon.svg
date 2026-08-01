@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- NYC subway "token" style badge -->
+  <circle cx="32" cy="32" r="30" fill="#0039A6"/>
+  <circle cx="32" cy="32" r="30" fill="none" stroke="#ffffff" stroke-width="2"/>
+  <!-- inner ring like a subway bullet -->
+  <circle cx="32" cy="32" r="21" fill="#EE352E"/>
+  <!-- stylized "T" for TransitPlotter -->
+  <path d="M20 20 H44 V27 H36 V46 H28 V27 H20 Z" fill="#ffffff"/>
+</svg>

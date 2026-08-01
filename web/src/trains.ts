@@ -19,8 +19,9 @@ interface Leg {
   r: string;
   ns?: string;
   dest?: string;
-  mode: "subway" | "ferry";
+  mode: "subway" | "ferry" | "bus";
   label: string;
+  boro: string;
   d0: number; // depart epoch s
   d1: number; // arrive epoch s
   hts: number; // feed header epoch s
@@ -71,8 +72,9 @@ export interface LiveTrain {
   status: TrainStatus;
   ns: string; // next stop
   dest: string;
-  mode: "subway" | "ferry";
+  mode: "subway" | "ferry" | "bus";
   label: string;
+  boro: string;
   /** Feed header time (epoch seconds) = when this delay was last observed. */
   asOf: number;
 }
@@ -120,6 +122,7 @@ export class TrainLayer {
         dest: l.dest,
         mode: l.mode ?? "subway",
         label: l.label ?? "",
+        boro: l.boro ?? "",
         d0: l.d0,
         d1: l.d1,
         hts: l.hts,
@@ -209,6 +212,7 @@ export class TrainLayer {
             asOf: l.hts,
             mode: l.mode,
             label: l.label,
+            boro: l.boro,
           },
         });
 
@@ -223,6 +227,7 @@ export class TrainLayer {
           dest: l.dest ?? "",
           mode: l.mode,
           label: l.label,
+          boro: l.boro,
           asOf: l.hts,
         });
 

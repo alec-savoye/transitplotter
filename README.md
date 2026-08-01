@@ -22,6 +22,10 @@ Everything runs in Docker; nothing is installed on the host.
 - **NYC Ferry boats** shown live (distinct boat markers, dashed water routes,
   ferry terminals), toggled on/off. Ferries use real GPS positions from the
   feed and follow their route shape toward the next landing.
+- **MTA Buses** shown live (distinct route-pill markers), using real GPS
+  positions. **Per-borough toggles** (Manhattan + Brooklyn default on) and a
+  **zoom-gate slider** (default: show at zoom ≥ 13.5) keep the ~5k buses from
+  overwhelming the map. Requires a free `BUS_API_KEY`.
 - **3D tilted view** with a compass control (drag / right-click to rotate).
 - **Route-bullet markers**: trains are MTA-style colored bullets showing the
   route letter/number; **express** services render as diamonds.
@@ -137,6 +141,26 @@ landing.
 
 Ferry data is namespaced with an `F:` id prefix and an `agency` column so it
 never collides with subway ids, and it carries `mode: "ferry"` on the wire.
+
+### 5. MTA Bus feeds — *buses* (free API key required)
+
+MTA Bus Time publishes GTFS-realtime via OneBusAway. **A free developer key is
+required** (request at <https://register.developer.obanyc.com/>); set it as
+`BUS_API_KEY`. The vehicle feed **includes real GPS coordinates**.
+
+- Static: 5 borough ZIPs
+  `http://web.mta.info/developers/data/nyct/bus/google_transit_<borough>.zip`
+  ingested with a `B:` prefix + `agency="bus"`. Only **routes/stops/trips** are
+  stored — **not** stop_times or shapes — since the realtime feed provides GPS
+  and `stopId` directly. This keeps the cache growth small (~15 MB).
+- Realtime (parsed in [`server/src/bus.ts`](server/src/bus.ts)):
+  - `https://gtfsrt.prod.obanyc.com/vehiclePositions?key=…` — live GPS, bearing, stopId
+  - `https://gtfsrt.prod.obanyc.com/tripUpdates?key=…` — predicted stop times
+
+Buses are placed at their GPS point and slide in a straight line toward the next
+stop (no street geometry). Each carries `mode:"bus"`, the route `label`, and a
+`boro` code (derived from the route prefix: `M/X`→Manhattan, `B/BM`→Brooklyn,
+`BX/BXM`→Bronx, `Q/QM`→Queens, `S/SIM`→Staten Island) for client-side toggling.
 
 ---
 
@@ -285,6 +309,8 @@ server/src/
   alerts.ts                fetch + classify service alerts; per-route rollup
   feedstore.ts             holds latest parsed feed + alerts for lookups
   state.ts                 realtime + static -> active "legs" per train
+  ferry.ts                 NYC Ferry realtime -> GPS legs (mode:ferry)
+  bus.ts                   MTA Bus realtime -> GPS legs (mode:bus, borough)
   legwire.ts               ActiveLeg -> compact TrainLeg (segment polyline)
   arrivals.ts              build per-station arrivals board (+ station alerts)
   routing/graph.ts         build ride + transfer graph from the schedule
@@ -323,4 +349,9 @@ web/src/
 | `PORT`             | `8080`                           | server listen port (container)   |
 | `GTFS_CACHE_DIR`   | `<repo>/.cache`                  | where the static SQLite lives    |
 | `GTFS_STATIC_URL`  | MTA supplemented ZIP             | static GTFS source               |
+| `FERRY_STATIC_URL` | Connexionz NYC Ferry ZIP         | ferry static GTFS source         |
+| `BUS_API_KEY`      | *(unset)*                        | MTA Bus Time key; buses disabled when unset |
 | `GEOCODER_URL`     | `https://nominatim.openstreetmap.org` | geocoder for the trip planner (set to a self-hosted Nominatim to avoid public rate limits) |
+
+Provide `BUS_API_KEY` via a local `.env` file (gitignored) or the environment;
+`docker-compose.yml` passes it through to the server.

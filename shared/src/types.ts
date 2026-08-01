@@ -41,9 +41,11 @@ export interface TrainLeg {
    */
   dly?: number;
   /** Transit mode. Absent = subway. */
-  mode?: "subway" | "ferry";
-  /** Vessel/vehicle label, e.g. ferry "H200". */
+  mode?: "subway" | "ferry" | "bus";
+  /** Vessel/vehicle label, e.g. ferry "H200" or bus route "M15". */
   label?: string;
+  /** Borough code for buses (manhattan|brooklyn|bronx|queens|statenisland). */
+  boro?: string;
 }
 
 /** Message pushed from server to clients whenever the feed refreshes. */
@@ -144,6 +146,57 @@ export interface Itinerary {
   /** Origin/destination as resolved (echoed back for the UI). */
   origin: { name: string; lat: number; lon: number };
   destination: { name: string; lat: number; lon: number };
+}
+
+/** Per-mode late/total tally for a single mesh cell. */
+export interface TrackRecordModeTally {
+  /** Observations that were late (>= the server's late threshold). */
+  late: number;
+  /** Total completed-segment observations recorded in this cell for this mode. */
+  total: number;
+}
+
+/** One spatial mesh cell of the track-record overlay. */
+export interface TrackRecordCell {
+  /** Cell key "<latIndex>:<lonIndex>". */
+  key: string;
+  /** Cell center latitude (degrees). */
+  lat: number;
+  /** Cell center longitude (degrees). */
+  lon: number;
+  /** Combined late rate across tracked modes (late / total), 0..1. */
+  rate: number;
+  /** Total observations across all modes in this cell. */
+  total: number;
+  /**
+   * Whether this cell has enough history to be colored: it has been observed
+   * across a span of at least one calendar week. Cells that are not ready are
+   * rendered light gray ("not enough data yet").
+   */
+  ready: boolean;
+  /** Epoch ms of the first observation recorded in this cell (0 if none). */
+  firstObs: number;
+  /** Epoch ms of the most recent observation recorded in this cell (0 if none). */
+  lastObs: number;
+  /** Per-mode breakdown. Ferries are not tracked (no delay signal). */
+  subway: TrackRecordModeTally;
+  bus: TrackRecordModeTally;
+}
+
+/** Whole track-record snapshot returned by GET /trackrecords. */
+export interface TrackRecordSnapshot {
+  /** Total observations logged globally (across all cells/modes). */
+  totalObs: number;
+  /** Observation-window length (days) a cell must span before it's colored. */
+  windowDays: number;
+  /** Number of cells that currently meet the window requirement. */
+  readyCells: number;
+  /** Whether any cell is ready to display (readyCells > 0). */
+  ready: boolean;
+  /** Cell size in degrees [latStep, lonStep], for drawing cell rectangles. */
+  cellStep: [number, number];
+  /** Populated cells (empty cells are omitted). */
+  cells: TrackRecordCell[];
 }
 
 /** Live arrivals board for one station, split by direction. */

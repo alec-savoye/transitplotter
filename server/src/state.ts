@@ -31,8 +31,16 @@ export interface ActiveLeg {
   nextStopName: string | null; // human name of the next stop
   destName: string | null; // human name of the trip's final stop
 
-  mode?: "subway" | "ferry"; // defaults to subway when absent
-  label?: string; // vessel/vehicle label (ferries)
+  /**
+   * Delay in seconds reported directly by the feed (buses supply this via
+   * tripUpdate arrival.delay). When set, legwire uses it instead of estimating
+   * from median segment times.
+   */
+  delaySec?: number;
+
+  mode?: "subway" | "ferry" | "bus"; // defaults to subway when absent
+  label?: string; // vessel/vehicle label (ferries) or route (buses)
+  boro?: string; // borough code (buses) for client-side toggling
 }
 
 /** Direction from a GTFS-realtime stop id suffix, e.g. "125N" -> "N". */

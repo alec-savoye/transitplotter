@@ -12,6 +12,7 @@ import { rollUpStatus } from "./alerts.js";
 import type { RoutingGraph } from "./routing/graph.js";
 import { planJourney } from "./routing/plan.js";
 import { geocode } from "./routing/geocode.js";
+import type { TrackRecordStore } from "./trackrecord.js";
 
 export class Broadcaster {
   private wss: WebSocketServer;
@@ -25,7 +26,8 @@ export class Broadcaster {
   constructor(
     private stat: StaticData,
     private feedStore: FeedStore,
-    private graph: RoutingGraph
+    private graph: RoutingGraph,
+    private trackRecords: TrackRecordStore
   ) {
     this.routesGeoJson = JSON.stringify(buildRoutesGeoJson(stat));
     this.stationsGeoJson = JSON.stringify(buildStationsGeoJson(stat));
@@ -69,6 +71,12 @@ export class Broadcaster {
       res.end(this.stationsGeoJson);
       return;
     }
+    // Track records: persisted on-time/late history bucketed into a spatial mesh.
+    if (req.url === "/trackrecords") {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(this.trackRecords.snapshot()));
+      return;
+    }
     // All active subway alerts.
     if (req.url === "/alerts") {
       res.setHeader("Content-Type", "application/json");
@@ -109,7 +117,7 @@ export class Broadcaster {
       res.end(
         "TransitPlotter backend (API only).\n" +
           "The map UI is served separately on port 5173.\n\n" +
-          "Endpoints: /health /routes /geo/routes /geo/stations /alerts /status\n" +
+          "Endpoints: /health /routes /geo/routes /geo/stations /trackrecords /alerts /status\n" +
           "           /station/<id>/arrivals  /plan?from=..&to=..  (+ WebSocket)\n"
       );
       return;
@@ -234,14 +242,18 @@ function buildStationsGeoJson(stat: StaticData): GeoJSON.FeatureCollection {
     if (seen.has(base)) continue;
     seen.add(base);
 
-    // Ferry terminals aren't part of the subway canonical lines; tag by id.
+    // Tag by agency prefix so the client can layer/zoom-gate each mode.
     const isFerry = s.id.startsWith("F:");
+    const isBus = s.id.startsWith("B:");
+    const mode = isFerry ? "ferry" : isBus ? "bus" : "subway";
 
     const routeIds = [...(routesByStation.get(base) ?? [])].sort();
     const primary = routeIds[0];
     const color = isFerry
       ? "#0a3d62"
-      : (primary && stat.routes.get(primary)?.color) || "#0b60d6";
+      : isBus
+        ? "#1b7fc4"
+        : (primary && stat.routes.get(primary)?.color) || "#0b60d6";
 
     features.push({
       type: "Feature",
@@ -250,7 +262,7 @@ function buildStationsGeoJson(stat: StaticData): GeoJSON.FeatureCollection {
         name: s.name,
         routes: routeIds.join(""), // e.g. "456"
         color,
-        mode: isFerry ? "ferry" : "subway",
+        mode,
       },
       geometry: { type: "Point", coordinates: [s.lon, s.lat] },
     });

@@ -28,3 +28,12 @@ export const ALERTS_URL = `${BASE}/camsys%2Fall-alerts`;
 
 /** Alerts change slowly; poll less often than positions. */
 export const ALERTS_POLL_INTERVAL_MS = 60_000;
+
+/**
+ * MTA Bus Time GTFS-realtime (OneBusAway). Requires a free developer API key
+ * (set BUS_API_KEY). Vehicle positions include real GPS coordinates.
+ */
+export const BUS_API_KEY = process.env.BUS_API_KEY ?? "";
+const OBA = "https://gtfsrt.prod.obanyc.com";
+export const BUS_VEHICLES_URL = `${OBA}/vehiclePositions?key=${BUS_API_KEY}`;
+export const BUS_TRIPUPDATES_URL = `${OBA}/tripUpdates?key=${BUS_API_KEY}`;

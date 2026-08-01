@@ -64,8 +64,11 @@ export class AlertsUI {
   }
 
   private renderStrip(status: RouteStatus[]) {
-    const issues = status.filter((s) => s.severity > 0).length;
-    const bullets = status
+    // The strip shows subway services only; buses (~305) would flood it and are
+    // shown collapsed in the drawer instead.
+    const subway = status.filter((s) => !s.route.startsWith("B:") && !s.route.startsWith("F:"));
+    const issues = subway.filter((s) => s.severity > 0).length;
+    const bullets = subway
       .map((s) => {
         const badge =
           s.severity > 0
@@ -80,29 +83,45 @@ export class AlertsUI {
       `<span class="ss-bullets">${bullets}</span>`;
   }
 
+  private alertItem(a: ServiceAlert): string {
+    const chips = a.routes
+      .filter((r) => !isExpress(r))
+      .map((r) => {
+        const label = bulletLabel(r).replace(/^B:/, "");
+        return `<span class="al-chip" data-route="${r}">${label}</span>`;
+      })
+      .join("");
+    return `
+      <div class="al-item sev-${a.severity}">
+        <div class="al-item-head">${chips}<span class="al-effect">${a.effect}</span></div>
+        <div class="al-header">${a.header}</div>
+      </div>`;
+  }
+
   private renderDrawer(alerts: ServiceAlert[]) {
-    const bySev = [...alerts].sort((a, b) => b.severity - a.severity);
-    const items = bySev.length
-      ? bySev
-          .map((a) => {
-            const chips = a.routes
-              .filter((r) => !isExpress(r))
-              .map(
-                (r) =>
-                  `<span class="al-chip" data-route="${r}">${bulletLabel(r)}</span>`
-              )
-              .join("");
-            return `
-              <div class="al-item sev-${a.severity}">
-                <div class="al-item-head">${chips}<span class="al-effect">${a.effect}</span></div>
-                <div class="al-header">${a.header}</div>
-              </div>`;
-          })
-          .join("")
-      : `<div class="al-empty">No active service alerts.</div>`;
+    const isBusAlert = (a: ServiceAlert) => a.routes.some((r) => r.startsWith("B:"));
+    const subwayAlerts = alerts.filter((a) => !isBusAlert(a)).sort((a, b) => b.severity - a.severity);
+    const busAlerts = alerts.filter(isBusAlert).sort((a, b) => b.severity - a.severity);
+
+    const subwayItems = subwayAlerts.length
+      ? subwayAlerts.map((a) => this.alertItem(a)).join("")
+      : `<div class="al-empty">No active subway service alerts.</div>`;
+
+    // Bus alerts collapsed into a native <details> dropdown.
+    const busSection = `
+      <details class="al-bus">
+        <summary>Bus alerts (${busAlerts.length})</summary>
+        ${
+          busAlerts.length
+            ? busAlerts.map((a) => this.alertItem(a)).join("")
+            : `<div class="al-empty">No active bus service alerts.</div>`
+        }
+      </details>`;
+
     this.drawer.innerHTML =
       `<div class="al-head"><b>Service Alerts</b><span class="al-close">✕</span></div>` +
-      items;
+      subwayItems +
+      busSection;
   }
 
   private toggleDrawer(show?: boolean) {

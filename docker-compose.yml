@@ -20,12 +20,16 @@ services:
   server:
     build: .
     command: npm run dev:server
+    # Auto-start on Docker daemon startup and recover from crashes.
+    restart: unless-stopped
     ports:
       # host 8090 (8080 is taken by pihole); container still 8080
       - "8090:8080"
     environment:
       <<: *cache-env
       PORT: 8080
+      # MTA Bus Time developer API key (free from register.developer.obanyc.com).
+      BUS_API_KEY: ${BUS_API_KEY:-}
     volumes:
       - ./:/app
       - /app/node_modules
@@ -38,6 +42,8 @@ services:
   web:
     build: .
     command: npm run dev:web
+    # Auto-start on Docker daemon startup and recover from crashes.
+    restart: unless-stopped
     ports:
       - "5173:5173"
     # No VITE_SERVER_* here: the web app derives the backend host from the

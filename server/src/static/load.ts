@@ -139,13 +139,14 @@ export function loadStatic(): StaticData {
   // trips
   const trips = new Map<string, TripStatic>();
   for (const t of db
-    .prepare(`SELECT trip_id, route_id, shape_id, direction_id FROM trips`)
+    .prepare(`SELECT trip_id, route_id, shape_id, direction_id, headsign FROM trips`)
     .all() as any[]) {
     trips.set(t.trip_id, {
       tripId: t.trip_id,
       routeId: t.route_id,
       shapeId: t.shape_id,
       directionId: t.direction_id,
+      headsign: t.headsign || undefined,
     });
   }
 

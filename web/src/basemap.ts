@@ -4,7 +4,7 @@
 
 import maplibregl from "maplibre-gl";
 import type { RouteMeta } from "@transitplotter/shared";
-import { registerAllBullets, BULLET_PREFIX, FERRY_PREFIX } from "./bullets.js";
+import { registerAllBullets, BULLET_PREFIX, FERRY_PREFIX, BUS_PREFIX } from "./bullets.js";
 
 // Esri "World Imagery" satellite basemap. No API key required.
 const SATELLITE_TILES = [
@@ -103,11 +103,20 @@ export async function addLayers(
 
   map.addSource("stations", { type: "geojson", data: stationsGeo });
 
+  // Non-bus (subway/ferry) filter — bus stops are far too numerous to show
+  // except when zoomed way in (see bus-stops layer below).
+  const notBus: maplibregl.FilterSpecification = [
+    "!=",
+    ["get", "mode"],
+    "bus",
+  ] as unknown as maplibregl.FilterSpecification;
+
   // Small dots: visible when zoomed out, faded once pins take over.
   map.addLayer({
     id: "stations",
     type: "circle",
     source: "stations",
+    filter: notBus,
     paint: {
       "circle-radius": 2.5,
       "circle-color": "#ffffff",
@@ -116,6 +125,24 @@ export async function addLayers(
       // fade dots out as pins fade in
       "circle-opacity": ["interpolate", ["linear"], ["zoom"], 11, 0.8, 12.5, 0],
       "circle-stroke-opacity": ["interpolate", ["linear"], ["zoom"], 11, 0.8, 12.5, 0],
+    },
+  });
+
+  // Bus stops: small dots, zoom-gated to avoid clutter. Appear from ~z14 and
+  // grow/brighten as you zoom in.
+  map.addLayer({
+    id: "bus-stops",
+    type: "circle",
+    source: "stations",
+    minzoom: 13.5,
+    filter: ["==", ["get", "mode"], "bus"] as unknown as maplibregl.FilterSpecification,
+    paint: {
+      "circle-radius": ["interpolate", ["linear"], ["zoom"], 13.5, 2.5, 16, 5],
+      "circle-color": "#1b7fc4",
+      "circle-stroke-color": "#ffffff",
+      "circle-stroke-width": 1.2,
+      "circle-opacity": ["interpolate", ["linear"], ["zoom"], 13.5, 0, 14, 0.9],
+      "circle-stroke-opacity": ["interpolate", ["linear"], ["zoom"], 13.5, 0, 14, 0.9],
     },
   });
 
@@ -133,6 +160,7 @@ export async function addLayers(
     id: "station-pins",
     type: "symbol",
     source: "stations",
+    filter: notBus, // pins only for subway/ferry stations
     layout: {
       // e.g. color "#EE352E" -> image "pin-#EE352E"
       "icon-image": ["concat", "pin-", ["coalesce", ["get", "color"], DEFAULT_PIN_COLOR]],
@@ -186,6 +214,50 @@ export async function addLayers(
     },
   });
 
+  // "Track Records": a green→red reliability mesh built from persisted on-time
+  // history. Fed by trackrecords.ts; hidden by default, unlocked after enough
+  // data is collected and toggled via setTrackRecordsVisible(). Added before
+  // trains/bullets so vehicle markers stay clickable on top.
+  map.addSource("trackrecords", { type: "geojson", data: emptyFC() });
+  map.addLayer({
+    id: "trackrecords-fill",
+    type: "fill",
+    source: "trackrecords",
+    layout: { visibility: "none" },
+    paint: {
+      // Cells without a full week of data are light gray; ready cells are
+      // colored green (reliable) -> yellow -> red (often late) by late rate.
+      "fill-color": [
+        "case",
+        ["!", ["coalesce", ["get", "ready"], false]],
+        "#b8bcc2", // light gray: not enough data gathered yet
+        [
+          "interpolate",
+          ["linear"],
+          ["coalesce", ["get", "rate"], 0],
+          0, "#2ecc40",
+          0.25, "#a8d600",
+          0.5, "#ffc300",
+          0.75, "#ff7b00",
+          1, "#ff4136",
+        ],
+      ],
+      "fill-opacity": [
+        "case",
+        ["!", ["coalesce", ["get", "ready"], false]],
+        0.2,
+        0.35,
+      ],
+    },
+  });
+  map.addLayer({
+    id: "trackrecords-outline",
+    type: "line",
+    source: "trackrecords",
+    layout: { visibility: "none" },
+    paint: { "line-color": "#ffffff", "line-width": 0.3, "line-opacity": 0.25 },
+  });
+
   // Trains rendered as MTA route bullets (colored disc/diamond w/ label).
   registerAllBullets(map, routes);
   map.addSource("trains", { type: "geojson", data: emptyFC() });
@@ -206,11 +278,33 @@ export async function addLayers(
     },
   });
 
+  // Buses: zoom-gated + borough-filtered layer. Drawn BELOW trains/ferries so
+  // rail markers stay on top. Starts filtered to Manhattan + Brooklyn.
+  map.addLayer({
+    id: "buses",
+    type: "symbol",
+    source: "trains",
+    minzoom: DEFAULT_BUS_MINZOOM,
+    filter: busFilter(["manhattan", "brooklyn"]),
+    layout: {
+      "icon-image": [
+        "coalesce",
+        ["image", ["concat", BUS_PREFIX, ["get", "route"]]],
+        ["image", `${BUS_PREFIX}?`],
+      ],
+      // Always render every bus. With collision on, overlapping buses would
+      // flicker in/out as positions update each frame.
+      "icon-allow-overlap": true,
+      "icon-ignore-placement": true,
+      "icon-size": ["interpolate", ["linear"], ["zoom"], 13, 0.7, 16, 1.0],
+    },
+  });
+
   map.addLayer({
     id: "trains",
     type: "symbol",
     source: "trains",
-    filter: ["!=", ["get", "mode"], "ferry"],
+    filter: ["==", ["coalesce", ["get", "mode"], "subway"], "subway"],
     layout: {
       // route id -> "bullet-<route>", falling back to "bullet-?"
       "icon-image": [
@@ -241,6 +335,18 @@ export async function addLayers(
   });
 }
 
+/** Default zoom at/above which buses become visible. */
+export const DEFAULT_BUS_MINZOOM = 13.5;
+
+/** Build the buses layer filter for a set of enabled borough codes. */
+function busFilter(boros: string[]): maplibregl.FilterSpecification {
+  return [
+    "all",
+    ["==", ["get", "mode"], "bus"],
+    ["in", ["get", "boro"], ["literal", boros]],
+  ] as unknown as maplibregl.FilterSpecification;
+}
+
 /** Show or hide the ferry markers layer. */
 export function setFerriesVisible(map: maplibregl.Map, visible: boolean) {
   if (map.getLayer("ferries")) {
@@ -248,11 +354,28 @@ export function setFerriesVisible(map: maplibregl.Map, visible: boolean) {
   }
 }
 
+/** Update which boroughs' buses are shown. Empty array hides all buses. */
+export function setBusBoroughs(map: maplibregl.Map, boros: string[]) {
+  if (map.getLayer("buses")) map.setFilter("buses", busFilter(boros));
+}
+
+/** Set the minimum zoom at which buses appear. */
+export function setBusMinZoom(map: maplibregl.Map, minzoom: number) {
+  if (map.getLayer("buses")) map.setLayerZoomRange("buses", minzoom, 24);
+}
+
 /** Show or hide the delay "hotspots" heatmap layer. */
 export function setHotspotsVisible(map: maplibregl.Map, visible: boolean) {
   if (map.getLayer("hotspots")) {
     map.setLayoutProperty("hotspots", "visibility", visible ? "visible" : "none");
   }
+}
+
+/** Show or hide the "track records" reliability mesh (fill + outline). */
+export function setTrackRecordsVisible(map: maplibregl.Map, visible: boolean) {
+  const v = visible ? "visible" : "none";
+  if (map.getLayer("trackrecords-fill")) map.setLayoutProperty("trackrecords-fill", "visibility", v);
+  if (map.getLayer("trackrecords-outline")) map.setLayoutProperty("trackrecords-outline", "visibility", v);
 }
 
 /**

@@ -15,13 +15,19 @@ import type { Broadcaster } from "./ws.js";
 import { FeedStore } from "./feedstore.js";
 import { fetchAlerts } from "./alerts.js";
 import { fetchFerryLegs } from "./ferry.js";
+import { fetchBusLegs } from "./bus.js";
 import type { RoutingGraph } from "./routing/graph.js";
+import type { TrackRecordStore } from "./trackrecord.js";
+
+/** How often to flush the track-record tally to disk (ms). */
+const TRACK_FLUSH_INTERVAL_MS = 60_000;
 
 export function startLoops(
   stat: StaticData,
   broadcaster: Broadcaster,
   feedStore: FeedStore,
-  graph: RoutingGraph
+  graph: RoutingGraph,
+  trackRecords: TrackRecordStore
 ) {
   async function poll() {
     try {
@@ -29,18 +35,27 @@ export function startLoops(
       feedStore.set(feed); // keep latest feed for arrivals lookups
       const active = buildActiveLegs(feed, stat);
 
-      // Ferries (GPS-based); tolerate failures without dropping subway data.
+      // Ferries + buses (GPS-based); tolerate failures without dropping subway.
       let ferry: typeof active = [];
       try {
         ferry = await fetchFerryLegs(stat);
       } catch (e) {
         console.error("ferry poll error", e);
       }
+      let bus: typeof active = [];
+      try {
+        bus = await fetchBusLegs(stat);
+      } catch (e) {
+        console.error("bus poll error", e);
+      }
 
-      const legs = buildTrainLegs([...active, ...ferry], graph);
+      const legs = buildTrainLegs([...active, ...ferry, ...bus], graph);
+      // Tally on-time/late history into the spatial mesh (persisted over time).
+      trackRecords.ingest(legs);
       broadcaster.broadcast({ t: Date.now(), legs });
       console.log(
-        `polled feeds: ${feed.length} subway trips + ${ferry.length} ferries -> ${legs.length} legs`
+        `polled feeds: ${feed.length} subway trips + ${ferry.length} ferries + ` +
+          `${bus.length} buses -> ${legs.length} legs`
       );
     } catch (e) {
       console.error("poll error", e);
@@ -61,4 +76,5 @@ export function startLoops(
   pollAlerts();
   setInterval(poll, POLL_INTERVAL_MS);
   setInterval(pollAlerts, ALERTS_POLL_INTERVAL_MS);
+  setInterval(() => trackRecords.flush(), TRACK_FLUSH_INTERVAL_MS);
 }
