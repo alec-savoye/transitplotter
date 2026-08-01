@@ -30,6 +30,26 @@ export interface RoutingGraph {
   transfer: Map<string, TransferEdge[]>;
   /** base station ids that exist as nodes. */
   stations: Set<string>;
+  /**
+   * Typical (median) travel time in seconds keyed by "route|fromBase|toBase".
+   * Used to estimate how delayed a live leg is vs. its normal schedule.
+   */
+  typical: Map<string, number>;
+}
+
+/** Look up the typical seconds for a segment; direction-agnostic fallback. */
+export function typicalSeconds(
+  graph: RoutingGraph,
+  route: string,
+  fromBase: string,
+  toBase: string
+): number | null {
+  const r = route.endsWith("X") ? route.slice(0, -1) : route;
+  return (
+    graph.typical.get(`${r}|${fromBase}|${toBase}`) ??
+    graph.typical.get(`${r}|${toBase}|${fromBase}`) ??
+    null
+  );
 }
 
 /** Max walking distance (m) to treat two distinct stations as a transfer. */
@@ -103,12 +123,14 @@ export function buildRoutingGraph(stat: StaticData): RoutingGraph {
   }
 
   const ride = new Map<string, RideEdge[]>();
+  const typical = new Map<string, number>();
   for (const [key, arr] of durs) {
     const [route, from, to] = key.split("|");
     const seconds = Math.round(median(arr));
     let edges = ride.get(from);
     if (!edges) ride.set(from, (edges = []));
     edges.push({ to, route, seconds });
+    typical.set(key, seconds);
   }
 
   // Transfer edges: connect distinct base stations (different lines at the same
@@ -138,5 +160,5 @@ export function buildRoutingGraph(stat: StaticData): RoutingGraph {
     }
   }
 
-  return { ride, transfer, stations };
+  return { ride, transfer, stations, typical };
 }

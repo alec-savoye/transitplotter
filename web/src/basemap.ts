@@ -1,19 +1,14 @@
-// Builds the basemap: a real geographic map of the NYC area (CARTO raster
-// tiles, free / no API key) with subway route lines and station dots drawn on
-// top from the server's static GeoJSON.
+// Builds the basemap: a satellite/aerial view of the NYC area (Esri World
+// Imagery raster tiles, free / no API key) with subway route lines and station
+// dots drawn on top from the server's static GeoJSON.
 
 import maplibregl from "maplibre-gl";
 import type { RouteMeta } from "@transitplotter/shared";
 import { registerAllBullets, BULLET_PREFIX } from "./bullets.js";
 
-// CARTO "Voyager" raster basemap — real streets/land/water/parks in a light,
-// colorful palette. No API key required. (Swap "voyager" for "dark_all" for a
-// dark map, or "light_all" for a pale minimal one.)
-const CARTO_TILES = [
-  "https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
-  "https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
-  "https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
-  "https://d.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
+// Esri "World Imagery" satellite basemap. No API key required.
+const SATELLITE_TILES = [
+  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
 ];
 
 export function createMap(container: string): maplibregl.Map {
@@ -22,18 +17,18 @@ export function createMap(container: string): maplibregl.Map {
     style: {
       version: 8,
       sources: {
-        carto: {
+        satellite: {
           type: "raster",
-          tiles: CARTO_TILES,
+          tiles: SATELLITE_TILES,
           tileSize: 256,
           attribution:
-            '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+            "Imagery &copy; Esri, Maxar, Earthstar Geographics, and the GIS User Community",
         },
       },
       layers: [
         // Fallback background while tiles load.
-        { id: "bg", type: "background", paint: { "background-color": "#12151c" } },
-        { id: "carto", type: "raster", source: "carto" },
+        { id: "bg", type: "background", paint: { "background-color": "#0a0f14" } },
+        { id: "satellite", type: "raster", source: "satellite" },
       ],
       glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
     },
@@ -145,6 +140,36 @@ export async function addLayers(
     },
   });
 
+  // "Hotspots": a transparent red heat cloud around trains/stations with heavy
+  // delays. Fed each frame by TrainLayer (see trains.ts). Hidden by default;
+  // toggled via setHotspotsVisible().
+  map.addSource("hotspots", { type: "geojson", data: emptyFC() });
+  map.addLayer({
+    id: "hotspots",
+    type: "heatmap",
+    source: "hotspots",
+    layout: { visibility: "none" },
+    paint: {
+      // Per-point intensity from the delay weight (0..1).
+      "heatmap-weight": ["coalesce", ["get", "weight"], 0.5],
+      // Grow the cloud + intensity as you zoom in.
+      "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 9, 0.6, 15, 2.5],
+      "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 9, 24, 15, 70],
+      "heatmap-opacity": 0.55,
+      // Transparent -> deep red ramp (all red hues, per the "red cloud" spec).
+      "heatmap-color": [
+        "interpolate",
+        ["linear"],
+        ["heatmap-density"],
+        0, "rgba(255,0,0,0)",
+        0.2, "rgba(255,80,40,0.25)",
+        0.5, "rgba(255,40,20,0.5)",
+        0.8, "rgba(220,0,0,0.7)",
+        1, "rgba(160,0,0,0.85)",
+      ],
+    },
+  });
+
   // Trains rendered as MTA route bullets (colored disc/diamond w/ label).
   registerAllBullets(map, routes);
   map.addSource("trains", { type: "geojson", data: emptyFC() });
@@ -180,6 +205,13 @@ export async function addLayers(
       "icon-size": ["interpolate", ["linear"], ["zoom"], 10, 0.5, 14, 0.9],
     },
   });
+}
+
+/** Show or hide the delay "hotspots" heatmap layer. */
+export function setHotspotsVisible(map: maplibregl.Map, visible: boolean) {
+  if (map.getLayer("hotspots")) {
+    map.setLayoutProperty("hotspots", "visibility", visible ? "visible" : "none");
+  }
 }
 
 /**

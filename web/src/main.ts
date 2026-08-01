@@ -1,11 +1,13 @@
 import "maplibre-gl/dist/maplibre-gl.css";
+import type maplibregl from "maplibre-gl";
 import type { ServerMessage, RouteMeta } from "@transitplotter/shared";
-import { createMap, addLayers, setDisruptedRoutes } from "./basemap.js";
+import { createMap, addLayers, setDisruptedRoutes, setHotspotsVisible } from "./basemap.js";
 import { TrainLayer } from "./trains.js";
 import { buildLegend, attachTrainPopup } from "./ui.js";
 import { StationPanel } from "./station.js";
 import { AlertsUI } from "./alerts.js";
 import { TripPlanner } from "./planner.js";
+import { attachHotspotSummary } from "./hotspot.js";
 import { SERVER_HTTP, SERVER_WS } from "./config.js";
 
 const hud = document.getElementById("hud")!;
@@ -43,7 +45,28 @@ async function main() {
   new TripPlanner(map, SERVER_HTTP);
 
   const trainLayer = new TrainLayer(map, routes);
+
+  // "Hotspots" toggle — red delay clouds around heavily delayed trains.
+  const isHotspotsOn = setupHotspotsToggle(map);
+  // Click a hotspot cloud to see why it's flagged (delayed trains summary).
+  attachHotspotSummary(map, trainLayer, colorFor, isHotspotsOn);
+
   connect(trainLayer);
+}
+
+/** Wires the toggle button; returns a getter for the current on/off state. */
+function setupHotspotsToggle(map: maplibregl.Map): () => boolean {
+  const btn = document.getElementById("hotspots-toggle");
+  let on = false;
+  if (btn) {
+    btn.addEventListener("click", () => {
+      on = !on;
+      setHotspotsVisible(map, on);
+      btn.classList.toggle("active", on);
+      btn.textContent = on ? "Hotspots: On" : "Hotspots: Off";
+    });
+  }
+  return () => on;
 }
 
 function connect(trainLayer: TrainLayer) {

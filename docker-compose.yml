@@ -12,7 +12,7 @@ x-cache-env: &cache-env
 
 x-cache-volume: &cache-volume
   type: bind
-  source: ${GTFS_CACHE_HOST:-/srv/active-raid/LIBRARIES/247/tmp-trainsplotter}
+  source: ${GTFS_CACHE_HOST:-/srv/active-raid/LIBRARIES/247/transitplotter}
   target: /cache
 
 services:

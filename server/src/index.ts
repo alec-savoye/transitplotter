@@ -27,7 +27,7 @@ export function startServer(port = PORT) {
   const feedStore = new FeedStore();
   const broadcaster = new Broadcaster(stat, feedStore, graph);
   broadcaster.listen(port);
-  startLoops(stat, broadcaster, feedStore);
+  startLoops(stat, broadcaster, feedStore, graph);
   return broadcaster;
 }
 

@@ -5,9 +5,33 @@
 
 import type { TrainLeg } from "@transitplotter/shared";
 import type { ActiveLeg } from "./state.js";
+import type { RoutingGraph } from "./routing/graph.js";
+import { typicalSeconds } from "./routing/graph.js";
 
 /** Round a coordinate to ~1m precision to shrink the payload. */
 const r6 = (n: number) => Math.round(n * 1e6) / 1e6;
+
+const baseStop = (id: string) =>
+  id.endsWith("N") || id.endsWith("S") ? id.slice(0, -1) : id;
+
+/**
+ * Max plausible train speed (m/s). NYC subway tops out well under this; we use
+ * it only to reject implausible feed predictions that would otherwise make a
+ * train teleport across a long segment in a couple of seconds. ~30 m/s ≈ 67mph.
+ */
+const MAX_SPEED_MPS = 30;
+
+/** Approximate planar length of a [lng,lat] polyline in meters. */
+function pathLengthM(path: [number, number][]): number {
+  let L = 0;
+  for (let i = 1; i < path.length; i++) {
+    const latMid = ((path[i][1] + path[i - 1][1]) / 2) * (Math.PI / 180);
+    const dx = (path[i][0] - path[i - 1][0]) * 111_320 * Math.cos(latMid);
+    const dy = (path[i][1] - path[i - 1][1]) * 110_540;
+    L += Math.hypot(dx, dy);
+  }
+  return L;
+}
 
 /**
  * Slice a shape's point list to just the portion between fromDist and toDist,
@@ -45,20 +69,50 @@ function legPath(leg: ActiveLeg): [number, number][] {
   return [];
 }
 
-export function buildTrainLegs(legs: ActiveLeg[]): TrainLeg[] {
+export function buildTrainLegs(legs: ActiveLeg[], graph: RoutingGraph): TrainLeg[] {
   const out: TrainLeg[] = [];
   for (const leg of legs) {
     const path = legPath(leg);
     if (path.length === 0) continue; // cannot place this train
+
+    let d0 = Math.round(leg.departTs);
+    let d1 = Math.round(leg.arriveTs);
+
+    // Guard against bad feed predictions that would make a train teleport:
+    // ensure the leg lasts at least as long as covering its path at MAX_SPEED.
+    // Without this, a 2s span over a 2km segment renders as ~1000 m/s.
+    const lengthM = pathLengthM(path);
+    const minDuration = Math.max(1, Math.ceil(lengthM / MAX_SPEED_MPS));
+    if (d1 - d0 < minDuration) {
+      d1 = d0 + minDuration;
+    }
+
+    // Delay estimate: predicted leg duration minus the typical (median) time
+    // for this route segment. Positive means the train is running slow. Use the
+    // *original* predicted span, not the clamped one.
+    let dly: number | undefined;
+    const typical = typicalSeconds(
+      graph,
+      leg.routeId,
+      baseStop(leg.fromStopId),
+      baseStop(leg.toStopId)
+    );
+    if (typical != null) {
+      const predicted = leg.arriveTs - leg.departTs;
+      const d = Math.round(predicted - typical);
+      if (d > 0) dly = d;
+    }
+
     out.push({
       id: leg.tripId,
       r: leg.routeId,
       path,
-      d0: Math.round(leg.departTs),
-      d1: Math.round(leg.arriveTs),
+      d0,
+      d1,
       hts: Math.round(leg.headerTs),
       ns: leg.nextStopName ?? undefined,
       dest: leg.destName ?? undefined,
+      dly,
     });
   }
   return out;

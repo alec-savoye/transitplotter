@@ -14,14 +14,20 @@ import { POLL_INTERVAL_MS, ALERTS_POLL_INTERVAL_MS } from "./feeds.js";
 import type { Broadcaster } from "./ws.js";
 import { FeedStore } from "./feedstore.js";
 import { fetchAlerts } from "./alerts.js";
+import type { RoutingGraph } from "./routing/graph.js";
 
-export function startLoops(stat: StaticData, broadcaster: Broadcaster, feedStore: FeedStore) {
+export function startLoops(
+  stat: StaticData,
+  broadcaster: Broadcaster,
+  feedStore: FeedStore,
+  graph: RoutingGraph
+) {
   async function poll() {
     try {
       const feed = await fetchAllFeeds();
       feedStore.set(feed); // keep latest feed for arrivals lookups
       const active = buildActiveLegs(feed, stat);
-      const legs = buildTrainLegs(active);
+      const legs = buildTrainLegs(active, graph);
       broadcaster.broadcast({ t: Date.now(), legs });
       console.log(`polled feeds: ${feed.length} trips -> ${legs.length} legs broadcast`);
     } catch (e) {

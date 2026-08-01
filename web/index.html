@@ -14,6 +14,19 @@
         border-radius: 6px; font-size: 13px; font-weight: 600;
       }
 
+      /* Hotspots toggle */
+      #hotspots-toggle {
+        position: absolute; top: 44px; left: 10px; z-index: 10;
+        background: rgba(0,0,0,0.65); color: #fff; border: 1px solid rgba(255,255,255,0.25);
+        padding: 6px 10px; border-radius: 6px; font-size: 13px; font-weight: 600;
+        cursor: pointer; font-family: inherit;
+      }
+      #hotspots-toggle:hover { background: rgba(0,0,0,0.8); }
+      #hotspots-toggle.active {
+        background: rgba(200,0,0,0.85); border-color: #ff6b6b;
+        box-shadow: 0 0 10px rgba(255,40,40,0.6);
+      }
+
       /* Line legend */
       #legend {
         position: absolute; bottom: 28px; left: 10px; z-index: 10;
@@ -51,6 +64,24 @@
       .tp-status.stalled { color: #c0392b; font-weight: 700; }
       .tp-status.moving { color: #148f4b; }
       .tp-status.stopped { color: #b8860b; }
+      .tp-delay { color: #c0392b; }
+
+      /* Hotspot summary popup */
+      .hs-head { font-weight: 800; color: #c0392b; margin-bottom: 4px; font-size: 14px; }
+      .hs-stats { font-size: 12px; line-height: 1.4; margin-bottom: 8px; }
+      .hs-rows { max-height: 220px; overflow-y: auto; }
+      .hs-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-top: 1px solid #eee; }
+      .hs-row-txt { font-size: 12px; line-height: 1.3; }
+      .hs-sub { color: #c0392b; font-weight: 600; }
+      .hs-stalled { color: #fff; background: #c0392b; border-radius: 3px; padding: 0 4px; font-size: 10px; }
+      .hs-more { font-size: 12px; color: #777; padding-top: 6px; }
+      .hs-bullet {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 24px; height: 24px; border-radius: 50%; font-weight: 700;
+        font-size: 12px; flex: none;
+      }
+      .hs-bullet.exp { border-radius: 4px; transform: rotate(45deg); }
+      .hs-bullet.exp span { transform: rotate(-45deg); }
 
       /* Station arrivals panel */
       #station-panel {
@@ -195,6 +226,7 @@
   <body>
     <div id="map"></div>
     <div id="hud">connecting…</div>
+    <button id="hotspots-toggle" title="Show delay hotspots">Hotspots: Off</button>
     <div id="legend"><h4>Subway Lines</h4><div class="rows"></div></div>
     <div id="disclaimer">
       Live data from the

@@ -49,6 +49,15 @@ function etaText(eta: number): string {
   return mins <= 1 ? "1 min" : `${mins} min`;
 }
 
+/** Format an epoch-seconds timestamp as "3:41 PM on Jul 31". */
+function whenText(epochSec: number): string {
+  if (!epochSec) return "";
+  const d = new Date(epochSec * 1000);
+  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const date = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return `${time} on ${date}`;
+}
+
 /**
  * Wire up click + hover behavior on the trains layer to show a popup with
  * route bullet, destination, next stop + ETA, and reliability status.
@@ -74,6 +83,8 @@ export function attachTrainPopup(
     const dest = p.dest || "—";
     const ns = p.ns || "—";
     const eta = Number(p.eta) || 0;
+    const dly = Number(p.dly) || 0;
+    const asOf = Number(p.asOf) || 0;
 
     const statusLabel =
       status === "stalled"
@@ -86,6 +97,10 @@ export function attachTrainPopup(
       number,
       number,
     ];
+    const delayRow =
+      dly >= 60
+        ? `<div class="tp-row tp-delay">Delayed <b>${Math.round(dly / 60)} min</b>${asOf ? ` as of ${whenText(asOf)}` : ""}</div>`
+        : "";
     const html = `
       <div class="tp-pop-head">
         ${bulletHtml(route, color)}
@@ -93,6 +108,7 @@ export function attachTrainPopup(
       </div>
       <div class="tp-row">Next stop: <b>${ns}</b></div>
       <div class="tp-row">Arriving: <span class="tp-eta">${etaText(eta) || "—"}</span></div>
+      ${delayRow}
       <div class="tp-status ${status}">${statusLabel}</div>
     `;
     popup.setLngLat(coords).setHTML(html).addTo(map);

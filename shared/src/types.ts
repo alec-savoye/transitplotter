@@ -34,6 +34,12 @@ export interface TrainLeg {
   ns?: string;
   /** Final destination stop name for the trip, if known. */
   dest?: string;
+  /**
+   * Estimated delay in seconds: how much longer this leg is predicted to take
+   * than the typical (median) time for the segment. 0 when on time or unknown.
+   * Drives the "hotspots" heatmap on the client.
+   */
+  dly?: number;
 }
 
 /** Message pushed from server to clients whenever the feed refreshes. */
