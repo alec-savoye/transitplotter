@@ -11,9 +11,20 @@ const SATELLITE_TILES = [
   "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
 ];
 
+/** Coarse-pointer / small-screen devices we treat as "mobile" for perf tuning. */
+const IS_MOBILE =
+  typeof navigator !== "undefined" &&
+  (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+    (typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches));
+
 export function createMap(container: string): maplibregl.Map {
   const map = new maplibregl.Map({
     container,
+    // Cap the device pixel ratio on mobile: retina phones render 3x the pixels,
+    // which combined with the per-frame vehicle updates can overload/crash the
+    // tab. 1.5x is plenty sharp for a live map.
+    pixelRatio: IS_MOBILE ? Math.min(window.devicePixelRatio || 1, 1.5) : undefined,
+    // Flat (non-tilted) on mobile is cheaper to render and easier to pan.
     style: {
       version: 8,
       sources: {
@@ -34,8 +45,8 @@ export function createMap(container: string): maplibregl.Map {
     },
     center: [-73.98, 40.75], // Midtown Manhattan
     zoom: 11,
-    pitch: 45, // tilted 3D-style view
-    bearing: -17,
+    pitch: IS_MOBILE ? 0 : 45, // tilted 3D-style view (flat on mobile for perf)
+    bearing: IS_MOBILE ? 0 : -17,
     maxPitch: 75,
   });
 

@@ -10,6 +10,7 @@ import { startLoops } from "./tick.js";
 import { FeedStore } from "./feedstore.js";
 import { buildRoutingGraph } from "./routing/graph.js";
 import { TrackRecordStore } from "./trackrecord.js";
+import { VisitStore } from "./visits.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 8080);
@@ -35,13 +36,15 @@ export function startServer(port = PORT) {
 
   const feedStore = new FeedStore();
   const trackRecords = new TrackRecordStore(CACHE_DIR);
-  const broadcaster = new Broadcaster(stat, feedStore, graph, trackRecords);
+  const visits = new VisitStore(CACHE_DIR);
+  const broadcaster = new Broadcaster(stat, feedStore, graph, trackRecords, visits);
   broadcaster.listen(port);
   startLoops(stat, broadcaster, feedStore, graph, trackRecords);
 
   // Persist the latest tally on shutdown so a restart doesn't lose recent data.
   const shutdown = () => {
     trackRecords.flush(true);
+    visits.flush(true);
     process.exit(0);
   };
   process.on("SIGTERM", shutdown);

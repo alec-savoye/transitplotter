@@ -13,6 +13,10 @@ import type { RoutingGraph } from "./routing/graph.js";
 import { planJourney } from "./routing/plan.js";
 import { geocode } from "./routing/geocode.js";
 import type { TrackRecordStore } from "./trackrecord.js";
+import { VisitStore, clientIp } from "./visits.js";
+
+/** Admin-page password. Override via ADMIN_PASSWORD env; defaults to "CONFIG". */
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "CONFIG";
 
 export class Broadcaster {
   private wss: WebSocketServer;
@@ -27,7 +31,8 @@ export class Broadcaster {
     private stat: StaticData,
     private feedStore: FeedStore,
     private graph: RoutingGraph,
-    private trackRecords: TrackRecordStore
+    private trackRecords: TrackRecordStore,
+    private visits: VisitStore
   ) {
     this.routesGeoJson = JSON.stringify(buildRoutesGeoJson(stat));
     this.stationsGeoJson = JSON.stringify(buildStationsGeoJson(stat));
@@ -71,10 +76,53 @@ export class Broadcaster {
       res.end(this.stationsGeoJson);
       return;
     }
+    // Visitor beacon: record one page visit + the visitor's (public) IP.
+    if (req.url === "/visit") {
+      this.visits.record(clientIp(req));
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    // Admin: password check (gates the UI). Body/query `password`.
+    if (req.url && req.url.startsWith("/admin/login")) {
+      await this.handleAdminLogin(req, res);
+      return;
+    }
+    // Admin: visitor stats. Requires the admin key via header or ?key=.
+    if (req.url && req.url.startsWith("/admin/stats")) {
+      if (!this.adminAuthed(req)) {
+        res.statusCode = 401;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(this.visits.stats()));
+      return;
+    }
     // Track records: persisted on-time/late history bucketed into a spatial mesh.
     if (req.url === "/trackrecords") {
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify(this.trackRecords.snapshot()));
+      return;
+    }
+    // Per-cell historical series (% lateness vs. date): /trackrecords/history?key=..
+    if (req.url && req.url.startsWith("/trackrecords/history")) {
+      const url = new URL(req.url, "http://localhost");
+      const key = url.searchParams.get("key")?.trim();
+      res.setHeader("Content-Type", "application/json");
+      if (!key) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ error: "missing key" }));
+        return;
+      }
+      const hist = this.trackRecords.history(key);
+      if (!hist) {
+        res.statusCode = 404;
+        res.end(JSON.stringify({ error: "unknown cell" }));
+        return;
+      }
+      res.end(JSON.stringify(hist));
       return;
     }
     // All active subway alerts.
@@ -117,13 +165,52 @@ export class Broadcaster {
       res.end(
         "TransitPlotter backend (API only).\n" +
           "The map UI is served separately on port 5173.\n\n" +
-          "Endpoints: /health /routes /geo/routes /geo/stations /trackrecords /alerts /status\n" +
+          "Endpoints: /health /routes /geo/routes /geo/stations /trackrecords /visit /alerts /status\n" +
           "           /station/<id>/arrivals  /plan?from=..&to=..  (+ WebSocket)\n"
       );
       return;
     }
     res.statusCode = 404;
     res.end("not found");
+  }
+
+  /** Whether a request carries the correct admin key (header or ?key=). */
+  private adminAuthed(req: IncomingMessage): boolean {
+    const key = ADMIN_PASSWORD;
+    const hdr = req.headers["x-admin-key"];
+    if (typeof hdr === "string" && hdr === key) return true;
+    if (req.url) {
+      const url = new URL(req.url, "http://localhost");
+      if (url.searchParams.get("key") === key) return true;
+    }
+    return false;
+  }
+
+  /** POST/GET /admin/login?password=.. -> { ok } if the password is correct. */
+  private async handleAdminLogin(req: IncomingMessage, res: ServerResponse) {
+    res.setHeader("Content-Type", "application/json");
+    let password = "";
+    const url = new URL(req.url!, "http://localhost");
+    password = url.searchParams.get("password") ?? "";
+    if (!password && req.method === "POST") {
+      password = await new Promise<string>((resolve) => {
+        let body = "";
+        req.on("data", (d) => (body += d));
+        req.on("end", () => {
+          try {
+            resolve(JSON.parse(body).password ?? "");
+          } catch {
+            resolve("");
+          }
+        });
+      });
+    }
+    if (password === ADMIN_PASSWORD) {
+      res.end(JSON.stringify({ ok: true, key: ADMIN_PASSWORD }));
+    } else {
+      res.statusCode = 401;
+      res.end(JSON.stringify({ error: "wrong password" }));
+    }
   }
 
   /** Handle GET /plan?from=..&to=.. : geocode both ends, then plan a journey. */

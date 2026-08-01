@@ -17,7 +17,13 @@
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
-import type { TrainLeg, TrackRecordSnapshot, TrackRecordCell } from "@transitplotter/shared";
+import type {
+  TrainLeg,
+  TrackRecordSnapshot,
+  TrackRecordCell,
+  TrackRecordHistory,
+  TrackRecordDay,
+} from "@transitplotter/shared";
 
 /** Mesh cell size in degrees (~a few NYC blocks; ~0.004° lat ≈ 445 m). */
 const LAT_STEP = 0.004;
@@ -52,6 +58,11 @@ interface Cell {
   firstObs: number;
   /** Epoch ms of the most recent observation recorded in this cell. */
   lastObs: number;
+  /**
+   * Per-calendar-day late/total tallies keyed by "YYYY-MM-DD", enabling a
+   * historical %-lateness-vs-date plot when a ready cell is clicked.
+   */
+  days: Map<string, Tally>;
 }
 
 /** What we remember about a trip between polls, to detect segment completion. */
@@ -72,11 +83,27 @@ interface DiskShape {
   totalObs: number;
   cells: Record<
     string,
-    { subway: Tally; bus: Tally; firstObs?: number; lastObs?: number }
+    {
+      subway: Tally;
+      bus: Tally;
+      firstObs?: number;
+      lastObs?: number;
+      /** Per-day tallies keyed by "YYYY-MM-DD". */
+      days?: Record<string, Tally>;
+    }
   >;
 }
 
 const emptyTally = (): Tally => ({ late: 0, total: 0 });
+
+/** Local calendar date "YYYY-MM-DD" for an epoch-ms timestamp. */
+function dayKey(epochMs: number): string {
+  const d = new Date(epochMs);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
 
 export class TrackRecordStore {
   private cells = new Map<string, Cell>();
@@ -100,7 +127,13 @@ export class TrackRecordStore {
   private getCell(key: string): Cell {
     let c = this.cells.get(key);
     if (!c) {
-      c = { subway: emptyTally(), bus: emptyTally(), firstObs: 0, lastObs: 0 };
+      c = {
+        subway: emptyTally(),
+        bus: emptyTally(),
+        firstObs: 0,
+        lastObs: 0,
+        days: new Map(),
+      };
       this.cells.set(key, c);
     }
     return c;
@@ -162,8 +195,35 @@ export class TrackRecordStore {
     if (late) t.late++;
     if (!cell.firstObs) cell.firstObs = now;
     cell.lastObs = now;
+
+    // Per-day tally (all modes combined) for the historical plot.
+    const dk = dayKey(now);
+    let day = cell.days.get(dk);
+    if (!day) cell.days.set(dk, (day = emptyTally()));
+    day.total++;
+    if (late) day.late++;
+
     this.totalObs++;
     this.dirty = true;
+  }
+
+  /**
+   * Per-day historical series for one cell (oldest first), for the click-through
+   * "% lateness vs. date" plot. Returns null for unknown/empty cells.
+   */
+  history(key: string): TrackRecordHistory | null {
+    const c = this.cells.get(key);
+    if (!c || c.days.size === 0) return null;
+    const [li, lo] = key.split(":").map(Number);
+    const days: TrackRecordDay[] = [...c.days.entries()]
+      .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+      .map(([date, t]) => ({ date, late: t.late, total: t.total }));
+    return {
+      key,
+      lat: (li + 0.5) * LAT_STEP,
+      lon: (lo + 0.5) * LON_STEP,
+      days,
+    };
   }
 
   /** Serializable snapshot for the API / overlay. */
@@ -211,11 +271,16 @@ export class TrackRecordStore {
       const raw = JSON.parse(readFileSync(this.path, "utf8")) as DiskShape;
       this.totalObs = raw.totalObs ?? 0;
       for (const [key, c] of Object.entries(raw.cells ?? {})) {
+        const days = new Map<string, Tally>();
+        for (const [dk, t] of Object.entries(c.days ?? {})) {
+          days.set(dk, { late: t.late ?? 0, total: t.total ?? 0 });
+        }
         this.cells.set(key, {
           subway: { late: c.subway?.late ?? 0, total: c.subway?.total ?? 0 },
           bus: { late: c.bus?.late ?? 0, total: c.bus?.total ?? 0 },
           firstObs: c.firstObs ?? 0,
           lastObs: c.lastObs ?? 0,
+          days,
         });
       }
       console.log(
@@ -232,13 +297,17 @@ export class TrackRecordStore {
     try {
       mkdirSync(dirname(this.path), { recursive: true });
       const out: DiskShape = { totalObs: this.totalObs, cells: {} };
-      for (const [key, c] of this.cells)
+      for (const [key, c] of this.cells) {
+        const days: Record<string, Tally> = {};
+        for (const [dk, t] of c.days) days[dk] = t;
         out.cells[key] = {
           subway: c.subway,
           bus: c.bus,
           firstObs: c.firstObs,
           lastObs: c.lastObs,
+          days,
         };
+      }
       writeFileSync(this.path, JSON.stringify(out));
       this.dirty = false;
     } catch (e) {

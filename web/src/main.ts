@@ -19,6 +19,7 @@ import { TripPlanner } from "./planner.js";
 import { attachHotspotSummary } from "./hotspot.js";
 import { TrackRecords } from "./trackrecords.js";
 import { attachTrackRecordSummary } from "./trackrecord-summary.js";
+import { attachAdmin } from "./admin.js";
 import { SERVER_HTTP, SERVER_WS } from "./config.js";
 
 const hud = document.getElementById("hud")!;
@@ -52,8 +53,9 @@ async function main() {
   });
   alertsUI.start();
 
-  // Trip planner (address-to-address).
-  new TripPlanner(map, SERVER_HTTP);
+  // Trip planner (address-to-address). Hidden until toggled from the controls.
+  const planner = new TripPlanner(map, SERVER_HTTP);
+  setupPlannerToggle(planner);
 
   const trainLayer = new TrainLayer(map, routes);
 
@@ -75,7 +77,15 @@ async function main() {
   // "Buses" per-borough toggles + zoom-gate slider.
   setupBusControls(map);
 
+  // Hidden admin: quadruple-click the map to open the visitor-stats overlay.
+  attachAdmin(map, SERVER_HTTP);
+
   connect(trainLayer);
+}
+
+/** Fire-and-forget visitor beacon so the server can tally visits + IPs. */
+function recordVisit() {
+  fetch(`${SERVER_HTTP}/visit`, { method: "GET", keepalive: true }).catch(() => {});
 }
 
 /** Per-borough bus toggles + a zoom-gate slider. */
@@ -97,12 +107,46 @@ function setupBusControls(map: maplibregl.Map) {
   const slider = document.getElementById("bus-zoom") as HTMLInputElement | null;
   const valEl = document.getElementById("bus-zoom-val");
   if (slider) {
+    // Debounce the actual layer update. Calling setLayerZoomRange on every
+    // slider "input" tick forces MapLibre to re-initialize the symbol layer,
+    // which makes the buses flash in and out while dragging. We update the
+    // label live but only apply the zoom gate once the drag settles (and skip
+    // redundant applies for the same value).
+    let applied = Number(slider.value);
+    let debounce: number | null = null;
+    const apply = (z: number) => {
+      if (z === applied) return;
+      applied = z;
+      setBusMinZoom(map, z);
+    };
     slider.addEventListener("input", () => {
       const z = Number(slider.value);
       if (valEl) valEl.textContent = z.toString();
-      setBusMinZoom(map, z);
+      if (debounce != null) window.clearTimeout(debounce);
+      debounce = window.setTimeout(() => apply(z), 150);
+    });
+    // Ensure the final value is applied immediately when the drag ends.
+    slider.addEventListener("change", () => {
+      if (debounce != null) window.clearTimeout(debounce);
+      apply(Number(slider.value));
     });
   }
+}
+
+/** Wires the Trip Planner on/off toggle button (planner starts hidden). */
+function setupPlannerToggle(planner: TripPlanner) {
+  const btn = document.getElementById("planner-toggle");
+  if (!btn) return;
+  const render = () => {
+    const on = planner.isVisible();
+    btn.classList.toggle("active", on);
+    btn.textContent = on ? "Trip Planner: On" : "Trip Planner: Off";
+  };
+  btn.addEventListener("click", () => {
+    planner.setVisible(!planner.isVisible());
+    render();
+  });
+  render();
 }
 
 /** Wires the ferries on/off toggle button (ferries start visible). */
@@ -269,4 +313,5 @@ function renderHud(msg: ServerMessage) {
   `;
 }
 
+recordVisit();
 main();

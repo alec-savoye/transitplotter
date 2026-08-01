@@ -120,6 +120,8 @@ export function buildTrainLegs(legs: ActiveLeg[], graph: RoutingGraph): TrainLeg
       mode: leg.mode && leg.mode !== "subway" ? leg.mode : undefined,
       label: leg.label || undefined,
       boro: leg.boro || undefined,
+      spd: leg.speedMps != null && leg.speedMps >= 0 ? Math.round(leg.speedMps * 10) / 10 : undefined,
+      vid: leg.vehicleId || undefined,
     });
   }
   return out;

@@ -41,6 +41,8 @@ export interface ActiveLeg {
   mode?: "subway" | "ferry" | "bus"; // defaults to subway when absent
   label?: string; // vessel/vehicle label (ferries) or route (buses)
   boro?: string; // borough code (buses) for client-side toggling
+  speedMps?: number; // momentary speed (m/s) if the feed reports it
+  vehicleId?: string; // vehicle/vessel id from the feed (e.g. ferry hull id)
 }
 
 /** Direction from a GTFS-realtime stop id suffix, e.g. "125N" -> "N". */

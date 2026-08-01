@@ -77,6 +77,22 @@
       .bus-zoom label { display: block; margin-bottom: 2px; opacity: 0.85; }
       .bus-zoom input[type="range"] { width: 100%; }
 
+      /* Mobile: smaller, tighter controls so they don't dominate the screen. */
+      @media (max-width: 640px), (pointer: coarse) {
+        #controls {
+          top: 132px; left: 6px; gap: 4px; max-width: 132px;
+        }
+        .ctl-btn {
+          padding: 4px 7px; font-size: 11px; border-radius: 5px;
+        }
+        #bus-group { padding: 4px; }
+        #bus-group .bg-title { font-size: 11px; margin-bottom: 3px; }
+        .bus-boro { padding: 3px 6px; font-size: 10px; margin-bottom: 3px; }
+        .bus-zoom { font-size: 10px; }
+        #legend { max-width: 150px; padding: 6px 7px; font-size: 11px; }
+        #legend .lg-bullet { width: 17px; height: 17px; font-size: 10px; }
+      }
+
       .tp-ferry {
         display: inline-flex; align-items: center; justify-content: center;
         width: 26px; height: 26px; border-radius: 6px; font-size: 15px; flex: none;
@@ -125,6 +141,8 @@
       .tp-status.moving { color: #148f4b; }
       .tp-status.stopped { color: #b8860b; }
       .tp-delay { color: #c0392b; }
+      .tp-sub { color: #888; font-size: 11px; margin-top: 3px; }
+      .tp-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 
       /* Hotspot summary popup */
       .hs-head { font-weight: 800; color: #c0392b; margin-bottom: 4px; font-size: 14px; }
@@ -156,6 +174,17 @@
       .tr-nums { text-align: right; }
       .tr-sub { color: #777; font-weight: 400; }
       .tr-foot { font-size: 11px; color: #888; margin-top: 8px; font-style: italic; }
+
+      /* Track-record historical %-lateness-vs-date plot */
+      .tr-plot { margin: 8px 0; min-height: 40px; }
+      .tr-plot-title { font-size: 11px; font-weight: 700; color: #555; margin-bottom: 2px; }
+      .tr-plot-loading, .tr-plot-empty { font-size: 11px; color: #999; padding: 8px 0; }
+      .tr-svg { display: block; background: #fafafa; border-radius: 4px; }
+      .tr-grid { stroke: #e2e2e2; stroke-width: 0.5; }
+      .tr-ylab { fill: #999; font-size: 7px; text-anchor: end; }
+      .tr-xlab { fill: #999; font-size: 7px; }
+      .tr-line { fill: none; stroke: #c0392b; stroke-width: 1.6; stroke-linejoin: round; }
+      .tr-dot-pt { fill: #c0392b; }
 
       /* "Collecting data" modal for track records */
       #tr-modal {
@@ -227,12 +256,16 @@
       .st-alert.sev-3 { border-left-color: #c0392b; }
       .st-alert.sev-2 { border-left-color: #e8730c; }
 
-      /* Trip planner (bottom-right) */
+      /* Trip planner (bottom-right) — hidden until toggled from the controls. */
       #planner {
         position: absolute; bottom: 28px; right: 10px; z-index: 15;
         width: 300px; max-width: 88vw; background: #fff; color: #111;
         border-radius: 10px; box-shadow: 0 2px 12px rgba(0,0,0,0.3);
         padding: 10px; font-size: 13px;
+      }
+      #planner.hidden { display: none; }
+      #planner-toggle.active {
+        background: rgba(11,96,214,0.9); border-color: #7cc4f2;
       }
       #planner .pl-head { font-weight: 700; margin-bottom: 8px; }
       #planner input {
@@ -326,6 +359,66 @@
         text-align: right;
       }
       #disclaimer a { color: #0b60d6; }
+
+      /* Hidden admin overlay (quadruple-click the map) */
+      #admin-overlay {
+        position: absolute; inset: 0; z-index: 50; display: none;
+        align-items: center; justify-content: center;
+        background: rgba(0,0,0,0.6);
+      }
+      #admin-overlay.show { display: flex; }
+      #admin-overlay .admin-card {
+        background: #14181d; color: #e8edf2; border-radius: 12px;
+        width: 92%; max-width: 620px; max-height: 88vh; overflow-y: auto;
+        padding: 18px 20px; box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+        font-family: system-ui, sans-serif;
+      }
+      .admin-head { display: flex; align-items: center; justify-content: space-between; }
+      .admin-head h2 { margin: 0; font-size: 18px; }
+      .admin-close {
+        background: none; border: none; color: #9aa4af;
+        font-size: 18px; cursor: pointer; line-height: 1;
+      }
+      .admin-gate { padding: 24px 0; }
+      .admin-auth-form { display: flex; flex-direction: column; gap: 8px; max-width: 260px; }
+      .admin-auth-form label { font-size: 12px; color: #9aa4af; }
+      .admin-auth-form input {
+        background: #0c1013; border: 1px solid #2a323b; border-radius: 6px;
+        color: #fff; padding: 8px 10px; font-size: 14px;
+      }
+      .admin-auth-form button {
+        background: #0b60d6; color: #fff; border: none; border-radius: 6px;
+        padding: 8px 12px; font-weight: 700; cursor: pointer; font-size: 13px;
+      }
+      .admin-auth-error { color: #ff6b6b; font-size: 12px; min-height: 14px; }
+      .admin-content.hidden { display: none; }
+      .admin-total { font-size: 14px; font-weight: 700; margin: 8px 0; }
+      .admin-section-title {
+        font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;
+        color: #7d8894; margin: 16px 0 6px; border-top: 1px solid #232a31; padding-top: 10px;
+      }
+      .admin-chart-bars {
+        display: flex; align-items: flex-end; gap: 2px; height: 120px;
+        border-bottom: 1px solid #232a31;
+      }
+      .admin-chart-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; min-width: 0; }
+      .admin-chart-value { font-size: 9px; color: #9aa4af; }
+      .admin-chart-bar { width: 70%; background: #0b60d6; border-radius: 2px 2px 0 0; min-height: 1px; }
+      .admin-chart-date { font-size: 8px; color: #7d8894; margin-top: 2px; white-space: nowrap; transform: rotate(-45deg); transform-origin: top left; }
+      .admin-map {
+        position: relative; background: #0c1013; border-radius: 6px; margin: 6px 0;
+        aspect-ratio: 2 / 1; overflow: hidden;
+      }
+      .admin-map-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; opacity: 0.9; }
+      .admin-map-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+      .admin-map-dot { fill: rgba(11,96,214,0.55); stroke: #4aa3df; stroke-width: 0.5; }
+      .admin-map-num { fill: #fff; font-size: 8px; text-anchor: middle; dominant-baseline: middle; pointer-events: none; }
+      .admin-stats { display: flex; flex-direction: column; gap: 4px; }
+      .admin-stat-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+      .admin-stat-label { flex: 0 0 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .admin-stat-bar { flex: 1; height: 8px; background: #232a31; border-radius: 4px; overflow: hidden; }
+      .admin-stat-fill { display: block; height: 100%; background: #0b60d6; }
+      .admin-stat-count { flex: none; font-variant-numeric: tabular-nums; color: #cfe6ff; }
     </style>
   </head>
   <body>
@@ -335,6 +428,7 @@
       <button id="hotspots-toggle" class="ctl-btn" title="Show delay hotspots">Hotspots: Off</button>
       <button id="trackrecords-toggle" class="ctl-btn" title="Show reliability track records">Track Records: Off</button>
       <button id="ferries-toggle" class="ctl-btn" title="Show NYC Ferry boats">Ferries: On</button>
+      <button id="planner-toggle" class="ctl-btn" title="Plan a trip">Trip Planner: Off</button>
       <div id="bus-group">
         <div class="bg-title">Buses</div>
         <button class="bus-boro active" data-boro="manhattan">Manhattan</button>
@@ -355,6 +449,34 @@
         <div class="tr-bar"><span></span></div>
         <div class="tr-break"></div>
         <button class="tr-close" type="button">Got it</button>
+      </div>
+    </div>
+    <div id="admin-overlay">
+      <div class="admin-card">
+        <div class="admin-head">
+          <h2>Admin</h2>
+          <button id="admin-close" class="admin-close" type="button">✕</button>
+        </div>
+        <div id="admin-gate" class="admin-gate">
+          <form id="admin-auth-form" class="admin-auth-form">
+            <label for="admin-password">Password</label>
+            <input type="password" id="admin-password" autocomplete="off" required />
+            <div id="admin-auth-error" class="admin-auth-error"></div>
+            <button type="submit">Enter</button>
+          </form>
+        </div>
+        <div id="admin-content" class="admin-content hidden">
+          <div class="admin-total" id="admin-total"></div>
+          <div class="admin-section-title">Visits over time</div>
+          <div class="admin-chart" id="admin-chart"></div>
+          <div class="admin-section-title">Visits by location</div>
+          <div class="admin-total" id="admin-ip-total"></div>
+          <div class="admin-map" id="admin-map">
+            <img class="admin-map-img" src="/assets/world.svg" alt="World map" />
+            <svg class="admin-map-svg" id="admin-map-svg" viewBox="0 0 720 360" preserveAspectRatio="none"></svg>
+          </div>
+          <div class="admin-stats" id="admin-locations"></div>
+        </div>
       </div>
     </div>
     <div id="legend"><h4>Subway Lines</h4><div class="rows"></div></div>

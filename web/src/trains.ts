@@ -22,6 +22,8 @@ interface Leg {
   mode: "subway" | "ferry" | "bus";
   label: string;
   boro: string;
+  spd?: number; // feed-reported speed (m/s), if any
+  vid?: string; // vehicle/vessel id, if any
   d0: number; // depart epoch s
   d1: number; // arrive epoch s
   hts: number; // feed header epoch s
@@ -79,11 +81,25 @@ export interface LiveTrain {
   asOf: number;
 }
 
+/**
+ * Cap the render rate. Rebuilding the GeoJSON for ~1000 vehicles on every
+ * animation frame (60fps) overwhelms mobile devices and can crash the tab.
+ * Interpolation still looks smooth at a lower rate. Mobile gets a lower cap.
+ */
+const isMobile =
+  typeof navigator !== "undefined" &&
+  (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+    (typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches));
+const TARGET_FPS = isMobile ? 12 : 30;
+const FRAME_MIN_MS = 1000 / TARGET_FPS;
+
 export class TrainLayer {
   private legs = new Map<string, Leg>();
   private colors = new Map<string, string>();
   /** Latest rendered position/state per train, refreshed each frame. */
   private live = new Map<string, LiveTrain>();
+  /** Wall-clock ms of the last rendered frame (for FPS throttling). */
+  private lastFrameMs = 0;
 
   constructor(private map: maplibregl.Map, routes: RouteMeta[]) {
     for (const r of routes) this.colors.set(r.id, r.color);
@@ -123,6 +139,8 @@ export class TrainLayer {
         mode: l.mode ?? "subway",
         label: l.label ?? "",
         boro: l.boro ?? "",
+        spd: l.spd,
+        vid: l.vid,
         d0: l.d0,
         d1: l.d1,
         hts: l.hts,
@@ -179,6 +197,15 @@ export class TrainLayer {
 
   private frame() {
     const now = performance.now();
+
+    // Throttle to TARGET_FPS: skip this frame if too little time has elapsed.
+    // Prevents rebuilding ~1000-feature GeoJSON at 60fps, which overloads mobile.
+    if (now - this.lastFrameMs < FRAME_MIN_MS) {
+      requestAnimationFrame(() => this.frame());
+      return;
+    }
+    this.lastFrameMs = now;
+
     const nowSec = Date.now() / 1000;
 
     // Slow pulse for the stalled-train ring (~2.5s period).
@@ -213,6 +240,8 @@ export class TrainLayer {
             mode: l.mode,
             label: l.label,
             boro: l.boro,
+            spd: l.spd ?? "",
+            vid: l.vid ?? "",
           },
         });
 

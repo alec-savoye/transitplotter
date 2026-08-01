@@ -46,6 +46,10 @@ export interface TrainLeg {
   label?: string;
   /** Borough code for buses (manhattan|brooklyn|bronx|queens|statenisland). */
   boro?: string;
+  /** Momentary speed in meters/second, when the feed reports it (ferries/buses). */
+  spd?: number;
+  /** Vehicle/vessel id from the feed (e.g. ferry hull id), when available. */
+  vid?: string;
 }
 
 /** Message pushed from server to clients whenever the feed refreshes. */
@@ -181,6 +185,28 @@ export interface TrackRecordCell {
   /** Per-mode breakdown. Ferries are not tracked (no delay signal). */
   subway: TrackRecordModeTally;
   bus: TrackRecordModeTally;
+}
+
+/** One calendar day of late/total history for a cell. */
+export interface TrackRecordDay {
+  /** Calendar date "YYYY-MM-DD" (server local time). */
+  date: string;
+  /** Segment observations that ran late that day. */
+  late: number;
+  /** Total segment observations that day. */
+  total: number;
+}
+
+/** Historical performance for one cell: GET /trackrecords/history?key=... */
+export interface TrackRecordHistory {
+  /** Cell key "<latIndex>:<lonIndex>". */
+  key: string;
+  /** Cell center latitude (degrees). */
+  lat: number;
+  /** Cell center longitude (degrees). */
+  lon: number;
+  /** Per-day series, oldest first, suitable for a %-lateness-vs-date plot. */
+  days: TrackRecordDay[];
 }
 
 /** Whole track-record snapshot returned by GET /trackrecords. */

@@ -5,7 +5,8 @@
 
 import maplibregl from "maplibre-gl";
 import type { TrackRecords } from "./trackrecords.js";
-import type { TrackRecordCell } from "@transitplotter/shared";
+import type { TrackRecordCell, TrackRecordHistory } from "@transitplotter/shared";
+import { SERVER_HTTP } from "./config.js";
 
 function pct(n: number): string {
   return `${Math.round(n * 100)}%`;
@@ -72,9 +73,71 @@ function summaryHtml(c: TrackRecordCell): string {
       here ran late
       <span class="tr-sub">(over ${daysSince(c.firstObs).toFixed(0)}+ days)</span>
     </div>
+    <div class="tr-plot"><div class="tr-plot-loading">Loading history…</div></div>
     <div class="tr-rows">${modes}</div>
     <div class="tr-foot">Ferry reliability is not yet tracked.</div>
   `;
+}
+
+/**
+ * Render a compact "% lateness vs. date" line plot as inline SVG from a cell's
+ * daily history. X axis = date (days, oldest→newest), Y axis = late %.
+ */
+function plotSvg(hist: TrackRecordHistory): string {
+  const days = hist.days.filter((d) => d.total > 0);
+  if (days.length === 0) return `<div class="tr-plot-empty">No daily history yet.</div>`;
+
+  const W = 248;
+  const H = 96;
+  const padL = 26; // room for y labels
+  const padR = 6;
+  const padT = 8;
+  const padB = 18; // room for x labels
+  const iw = W - padL - padR;
+  const ih = H - padT - padB;
+
+  const n = days.length;
+  const pctVals = days.map((d) => (d.late / d.total) * 100);
+  const xAt = (i: number) => padL + (n === 1 ? iw / 2 : (i / (n - 1)) * iw);
+  const yAt = (p: number) => padT + ih - (Math.min(100, p) / 100) * ih;
+
+  // Gridlines at 0/25/50/75/100%.
+  const grid = [0, 25, 50, 75, 100]
+    .map((p) => {
+      const y = yAt(p);
+      return `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" class="tr-grid"/>
+        <text x="${padL - 4}" y="${(y + 3).toFixed(1)}" class="tr-ylab">${p}</text>`;
+    })
+    .join("");
+
+  const line = days
+    .map((_, i) => `${xAt(i).toFixed(1)},${yAt(pctVals[i]).toFixed(1)}`)
+    .join(" ");
+
+  const dots = days
+    .map((d, i) => {
+      const cx = xAt(i).toFixed(1);
+      const cy = yAt(pctVals[i]).toFixed(1);
+      return `<circle cx="${cx}" cy="${cy}" r="2.2" class="tr-dot-pt"><title>${d.date}: ${pctVals[i].toFixed(0)}% late (${d.late}/${d.total})</title></circle>`;
+    })
+    .join("");
+
+  // First + last x labels (MM-DD) to avoid clutter.
+  const shortDate = (s: string) => s.slice(5);
+  const firstLab = `<text x="${xAt(0).toFixed(1)}" y="${H - 4}" class="tr-xlab" text-anchor="start">${shortDate(days[0].date)}</text>`;
+  const lastLab =
+    n > 1
+      ? `<text x="${xAt(n - 1).toFixed(1)}" y="${H - 4}" class="tr-xlab" text-anchor="end">${shortDate(days[n - 1].date)}</text>`
+      : "";
+
+  return `
+    <div class="tr-plot-title">% late by day</div>
+    <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" class="tr-svg">
+      ${grid}
+      <polyline points="${line}" class="tr-line"/>
+      ${dots}
+      ${firstLab}${lastLab}
+    </svg>`;
 }
 
 /**
@@ -105,5 +168,24 @@ export function attachTrackRecordSummary(
     if (!cell || cell.total === 0) return;
 
     popup.setLngLat(e.lngLat).setHTML(summaryHtml(cell)).addTo(map);
+
+    // Only ready (colored) cells get the historical %-lateness-vs-date plot;
+    // gray cells don't yet have a meaningful series.
+    if (!cell.ready) return;
+    fetchHistory(cell.key)
+      .then((hist) => {
+        const el = popup.getElement()?.querySelector(".tr-plot");
+        if (el) el.innerHTML = hist ? plotSvg(hist) : `<div class="tr-plot-empty">No history.</div>`;
+      })
+      .catch(() => {
+        const el = popup.getElement()?.querySelector(".tr-plot");
+        if (el) el.innerHTML = `<div class="tr-plot-empty">History unavailable.</div>`;
+      });
   });
+}
+
+async function fetchHistory(key: string): Promise<TrackRecordHistory | null> {
+  const res = await fetch(`${SERVER_HTTP}/trackrecords/history?key=${encodeURIComponent(key)}`);
+  if (!res.ok) return null;
+  return (await res.json()) as TrackRecordHistory;
 }

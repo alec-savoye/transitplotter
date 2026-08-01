@@ -26,6 +26,7 @@ export class TripPlanner {
   constructor(private map: maplibregl.Map, private serverHttp: string) {
     this.panel = document.createElement("div");
     this.panel.id = "planner";
+    this.panel.classList.add("hidden"); // hidden until toggled from controls
     this.panel.innerHTML = `
       <div class="pl-head">Trip Planner</div>
       <input id="pl-from" placeholder="From (address or place)" autocomplete="off" />
@@ -45,6 +46,17 @@ export class TripPlanner {
 
     this.addRouteLayer();
     this.loadStationCoords();
+  }
+
+  /** Show or hide the planner panel. */
+  setVisible(visible: boolean) {
+    this.panel.classList.toggle("hidden", !visible);
+    if (visible) this.panel.querySelector<HTMLInputElement>("#pl-from")?.focus();
+  }
+
+  /** Whether the planner panel is currently visible. */
+  isVisible(): boolean {
+    return !this.panel.classList.contains("hidden");
   }
 
   /** Cache base-station -> coordinate from the stations GeoJSON for highlighting. */

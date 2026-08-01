@@ -60,6 +60,30 @@ function whenText(epochSec: number): string {
   return `${time} on ${date}`;
 }
 
+/** Seconds-old age of an observation, e.g. "12s ago" / "3 min ago". */
+function agoText(epochSec: number): string {
+  if (!epochSec) return "";
+  const secs = Math.max(0, Math.round(Date.now() / 1000 - epochSec));
+  if (secs < 60) return `${secs}s ago`;
+  const m = Math.round(secs / 60);
+  return m === 1 ? "1 min ago" : `${m} min ago`;
+}
+
+/** Compass point (N, NE, …) plus degrees from a bearing in degrees. */
+function compassText(brg: number): string {
+  const dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  const idx = Math.round(((brg % 360) / 45)) % 8;
+  return `${dirs[idx]} (${Math.round(brg)}°)`;
+}
+
+/** m/s -> "8.3 kn · 15 km/h · 9 mph" (ferries report speed in m/s). */
+function speedText(mps: number): string {
+  const kn = mps * 1.943844;
+  const kmh = mps * 3.6;
+  const mph = mps * 2.236936;
+  return `${kn.toFixed(1)} kn · ${kmh.toFixed(0)} km/h · ${mph.toFixed(0)} mph`;
+}
+
 /**
  * Wire up click + hover behavior on the trains layer to show a popup with
  * route bullet, destination, next stop + ETA, and reliability status.
@@ -90,6 +114,9 @@ export function attachTrainPopup(
     const dly = Number(p.dly) || 0;
     const asOf = Number(p.asOf) || 0;
     const label = p.label || "";
+    const spd = p.spd !== "" && p.spd != null ? Number(p.spd) : NaN;
+    const vid = p.vid || "";
+    const brg = Number(p.brg);
 
     const statusLabel =
       status === "stalled"
@@ -118,7 +145,39 @@ export function attachTrainPopup(
         : `<div class="tp-pop-head">${bulletHtml(route, color)}
              <span class="tp-dest">to ${dest}</span></div>`;
     const nextLabel = isFerry ? "landing" : "stop";
-    const html = `
+
+    // Ferries get an expanded live-telemetry block (all the feed offers):
+    // vessel name/id, live speed, heading, current position, and freshness.
+    let ferryDetail = "";
+    if (isFerry) {
+      const moving = Number.isFinite(spd) ? spd > 0.5 : status === "moving";
+      const rows: string[] = [];
+      if (Number.isFinite(spd)) {
+        rows.push(
+          `<div class="tp-row">Speed: <b>${speedText(spd)}</b>${moving ? "" : " · <i>stationary</i>"}</div>`
+        );
+      }
+      if (Number.isFinite(brg) && moving) {
+        rows.push(`<div class="tp-row">Heading: <b>${compassText(brg)}</b></div>`);
+      }
+      rows.push(
+        `<div class="tp-row tp-mono">Position: ${coords[1].toFixed(5)}, ${coords[0].toFixed(5)}</div>`
+      );
+      if (vid) rows.push(`<div class="tp-row">Vessel ID: <b>${vid}</b></div>`);
+      if (asOf) rows.push(`<div class="tp-row tp-sub">Live as of ${agoText(asOf)}</div>`);
+      ferryDetail = rows.join("");
+    }
+
+    const html = isFerry
+      ? `
+      ${head}
+      <div class="tp-row">Next ${nextLabel}: <b>${ns}</b></div>
+      <div class="tp-row">Arriving: <span class="tp-eta">${etaText(eta) || "—"}</span></div>
+      ${ferryDetail}
+      ${delayRow}
+      <div class="tp-status ${status}">${statusLabel}</div>
+    `
+      : `
       ${head}
       <div class="tp-row">Next ${nextLabel}: <b>${ns}</b></div>
       <div class="tp-row">Arriving: <span class="tp-eta">${etaText(eta) || "—"}</span></div>

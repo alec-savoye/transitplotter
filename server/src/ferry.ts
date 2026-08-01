@@ -79,6 +79,12 @@ export async function fetchFerryLegs(stat: StaticData): Promise<ActiveLeg[]> {
     const shape = trip?.shapeId ? stat.shapes.get(trip.shapeId) ?? null : null;
     const headerTs = v.timestamp != null ? Number(v.timestamp) : nowSec;
     const label = v.vehicle?.label ?? v.vehicle?.id ?? "";
+    const vehicleId = v.vehicle?.id ?? undefined;
+    // The ferry feed reports momentary speed (m/s) on the position record.
+    const speedMps =
+      v.position?.speed != null && Number.isFinite(v.position.speed)
+        ? Number(v.position.speed)
+        : undefined;
 
     // Determine the next stop from the trip's stop_times sequence + the boat's
     // currentStopSequence, then find its predicted arrival.
@@ -142,6 +148,8 @@ export async function fetchFerryLegs(stat: StaticData): Promise<ActiveLeg[]> {
       destName,
       mode: "ferry",
       label,
+      speedMps,
+      vehicleId,
     });
   }
 
