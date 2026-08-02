@@ -4,6 +4,7 @@ import type { ServerMessage, RouteMeta } from "@transitplotter/shared";
 import {
   createMap,
   addLayers,
+  fitToAllRoutes,
   setDisruptedRoutes,
   setHotspotsVisible,
   setFerriesVisible,
@@ -20,9 +21,17 @@ import { attachHotspotSummary } from "./hotspot.js";
 import { TrackRecords } from "./trackrecords.js";
 import { attachTrackRecordSummary } from "./trackrecord-summary.js";
 import { attachAdmin } from "./admin.js";
+import { setupCountsModal } from "./counts-modal.js";
+import { setupIsolate } from "./isolate.js";
 import { SERVER_HTTP, SERVER_WS, VIEW_MODE, cycleViewMode } from "./config.js";
 
 const hud = document.getElementById("hud")!;
+
+/** Whether the estimated car count is shown in the HUD (and passed through to
+ *  the 48h chart). Toggled by the "Cars (est.)" control. */
+let carsVisible = true;
+/** Latest server message, re-rendered when the cars toggle flips. */
+let lastMsg: ServerMessage | null = null;
 
 async function main() {
   const map = createMap("map");
@@ -38,7 +47,10 @@ async function main() {
   const colorFor = (id: string) => colorById.get(id) ?? "#666666";
 
   await new Promise<void>((r) => map.on("load", () => r()));
-  await addLayers(map, SERVER_HTTP, routes);
+  const routesGeo = await addLayers(map, SERVER_HTTP, routes);
+
+  // Start top-down, north up, with the whole system in view.
+  fitToAllRoutes(map, routesGeo);
 
   buildLegend(routes);
   attachTrainPopup(map, colorFor);
@@ -74,6 +86,9 @@ async function main() {
   // "Ferries" toggle — show/hide NYC Ferry boats.
   setupFerriesToggle(map);
 
+  // "Cars (est.)" toggle — show/hide the estimated car count in the HUD/chart.
+  setupCarsToggle();
+
   // "Buses" per-borough toggles + zoom-gate slider.
   setupBusControls(map);
 
@@ -82,6 +97,12 @@ async function main() {
 
   // Hidden admin: quadruple-click the map to open the visitor-stats overlay.
   attachAdmin(map, SERVER_HTTP);
+
+  // Double-click/tap the HUD to open the 48h vehicle-count chart.
+  setupCountsModal(SERVER_HTTP);
+
+  // "Isolate" — pick a subway/ferry line to show alone with a live stats box.
+  setupIsolate(map, routes, trainLayer);
 
   connect(trainLayer);
 }
@@ -185,6 +206,32 @@ function setupFerriesToggle(map: maplibregl.Map) {
 }
 
 /**
+ * Wires the "Cars (est.)" toggle. Flips `carsVisible`, which hides/shows the
+ * HUD 🚗 line and tells the 48h chart whether to draw the cars series. The
+ * server keeps recording the estimate regardless; this is purely a display
+ * preference. Re-renders the HUD immediately from the last message.
+ */
+function setupCarsToggle() {
+  const btn = document.getElementById("cars-toggle");
+  if (!btn) return;
+  const render = () => {
+    btn.classList.toggle("active", carsVisible);
+    btn.textContent = carsVisible ? "Cars (est.): On" : "Cars (est.): Off";
+  };
+  btn.addEventListener("click", () => {
+    carsVisible = !carsVisible;
+    render();
+    if (lastMsg) renderHud(lastMsg);
+  });
+  render();
+}
+
+/** Whether the estimated car count should currently be displayed. */
+export function carsShown(): boolean {
+  return carsVisible;
+}
+
+/**
  * Wires the Track Records toggle. A cell is only colored once it has been
  * observed across at least one full calendar week; cells with less history show
  * light gray. Until *no* cell yet has a week of data (snapshot.ready === false),
@@ -285,6 +332,7 @@ function connect(trainLayer: TrainLayer) {
 
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data) as ServerMessage;
+    lastMsg = msg;
     trainLayer.update(msg);
     renderHud(msg);
   };
@@ -315,21 +363,42 @@ function renderHud(msg: ServerMessage) {
   const nowSec = Date.now() / 1000;
   for (const l of msg.legs) if (nowSec - l.hts > 90) stalled++;
 
-  const ageSec = Math.max(0, Math.round((Date.now() - msg.t) / 1000));
-  const ageText = ageSec < 5 ? "just now" : `${ageSec}s ago`;
-
   hud.innerHTML = `
     <div class="hud-status live">● Live</div>
+    <div class="hud-sub hud-lastpush" title="Time since the server last pushed an update">last update: ${lastPushText(msg.t)}</div>
     <div class="hud-line"><b>${msg.legs.length}</b> vehicles</div>
     <div class="hud-modes">
       <span title="Subway trains">🚇 ${subway}</span>
       <span title="Buses (enabled boroughs)">🚌 ${bus}</span>
       <span title="Ferries">⛴ ${ferry}</span>
     </div>
+    ${
+      msg.cars != null && carsVisible
+        ? `<div class="hud-sub" title="Estimated cars on NYC roads (from live traffic speeds)">🚗 ~${msg.cars.toLocaleString()} cars <span class="hud-est">est.</span></div>`
+        : ""
+    }
     <div class="hud-sub">${delayed} delayed · ${stalled} stalled</div>
-    <div class="hud-sub">updated ${ageText}</div>
+    <div class="hud-hint">double-click for 48h history</div>
   `;
 }
+
+/** Human-readable "time since the server last pushed" (from `ServerMessage.t`). */
+function lastPushText(serverT: number): string {
+  const ageSec = Math.max(0, Math.round((Date.now() - serverT) / 1000));
+  if (ageSec < 5) return "just now";
+  if (ageSec < 60) return `${ageSec}s ago`;
+  const min = Math.floor(ageSec / 60);
+  const sec = ageSec % 60;
+  return `${min}m ${sec}s ago`;
+}
+
+// Tick the "last update" line every second so it stays current between pushes,
+// which is why the HUD isn't re-rendered continuously.
+setInterval(() => {
+  if (!lastMsg) return;
+  const el = hud.querySelector<HTMLElement>(".hud-lastpush");
+  if (el) el.textContent = `last update: ${lastPushText(lastMsg.t)}`;
+}, 1000);
 
 recordVisit();
 main();

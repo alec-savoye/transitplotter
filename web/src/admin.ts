@@ -1,4 +1,4 @@
-// Hidden admin panel (visitor analytics), ported from the asphoto admin page.
+// Hidden admin panel (visitor analytics + data-source health).
 // Opened by quadruple-clicking anywhere on the map. Gated by a password; on
 // success the server returns a key used to fetch /admin/stats.
 
@@ -21,6 +21,24 @@ interface Stats {
   uniqueIps: number;
   locatedIps: number;
 }
+interface SourceHealth {
+  key: string;
+  label: string;
+  group: string;
+  url?: string;
+  lastPollTs?: number;
+  lastOkTs?: number;
+  lastDataTs?: number;
+  ok: boolean;
+  count?: number;
+  info?: string;
+  lastError?: string;
+  lastErrorTs?: number;
+}
+interface HealthSnapshot {
+  now: number;
+  sources: SourceHealth[];
+}
 
 const SVGNS = "http://www.w3.org/2000/svg";
 
@@ -35,16 +53,36 @@ export function attachAdmin(map: maplibregl.Map, serverHttp: string) {
   if (!overlay || !gate || !content || !form || !pwInput) return;
 
   let adminKey = "";
+  let healthTimer: number | null = null;
 
   const open = () => {
     overlay.classList.add("show");
     gate.style.display = adminKey ? "none" : "";
     content.classList.toggle("hidden", !adminKey);
     pwInput.value = "";
-    if (adminKey) loadStats();
-    else setTimeout(() => pwInput.focus(), 50);
+    if (adminKey) {
+      loadStats();
+      loadHealth();
+      startHealthPolling();
+    } else setTimeout(() => pwInput.focus(), 50);
   };
-  const close = () => overlay.classList.remove("show");
+  const close = () => {
+    overlay.classList.remove("show");
+    stopHealthPolling();
+  };
+
+  // Refresh the data-source health while the panel is open (it changes every
+  // poll ~20s; a 5s cadence keeps the "last poll/update" ages feeling live).
+  function startHealthPolling() {
+    stopHealthPolling();
+    healthTimer = window.setInterval(loadHealth, 5000);
+  }
+  function stopHealthPolling() {
+    if (healthTimer != null) {
+      window.clearInterval(healthTimer);
+      healthTimer = null;
+    }
+  }
 
   closeBtn?.addEventListener("click", close);
   overlay.addEventListener("click", (e) => {
@@ -83,6 +121,8 @@ export function attachAdmin(map: maplibregl.Map, serverHttp: string) {
         gate.style.display = "none";
         content.classList.remove("hidden");
         loadStats();
+        loadHealth();
+        startHealthPolling();
       })
       .catch((err) => {
         if (errEl) errEl.textContent = err.message;
@@ -109,6 +149,84 @@ export function attachAdmin(map: maplibregl.Map, serverHttp: string) {
     renderMap(data.locations || [], data.uniqueIps || 0, data.locatedIps || 0);
   }
 
+  function loadHealth() {
+    fetch(`${serverHttp}/admin/health?key=${encodeURIComponent(adminKey)}`)
+      .then((r) => {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then((snap: HealthSnapshot) => renderHealth(snap))
+      .catch((err) => {
+        const el = document.getElementById("admin-health");
+        if (el) el.textContent = "Error loading status: " + err.message;
+      });
+  }
+
+  function renderHealth(snap: HealthSnapshot) {
+    const el = document.getElementById("admin-health");
+    if (!el) return;
+    el.innerHTML = "";
+    const sources = snap.sources || [];
+    if (sources.length === 0) {
+      el.textContent = "No sources reporting yet.";
+      return;
+    }
+
+    // Group by logical group, preserving first-seen order.
+    const groups: string[] = [];
+    const byGroup = new Map<string, SourceHealth[]>();
+    for (const s of sources) {
+      if (!byGroup.has(s.group)) {
+        byGroup.set(s.group, []);
+        groups.push(s.group);
+      }
+      byGroup.get(s.group)!.push(s);
+    }
+
+    for (const g of groups) {
+      const gh = document.createElement("div");
+      gh.className = "admin-health-group";
+      gh.textContent = g;
+      el.appendChild(gh);
+
+      for (const s of byGroup.get(g)!) {
+        const row = document.createElement("div");
+        row.className = "admin-hs-row " + (s.ok ? "ok" : "bad");
+
+        const host = s.url ? hostOf(s.url) : "";
+        const parts: string[] = [];
+        if (s.count != null) parts.push(`${s.count.toLocaleString()} items`);
+        if (s.info) parts.push(s.info);
+        const infoLine = parts.join(" · ");
+
+        const errLine =
+          !s.ok && s.lastError
+            ? `<div class="admin-hs-err" title="${escapeHtml(s.lastError)}">⚠ ${escapeHtml(s.lastError)}${
+                s.lastErrorTs ? " (" + ago(snap.now, s.lastErrorTs) + ")" : ""
+              }</div>`
+            : s.lastError
+              ? `<div class="admin-hs-err" title="${escapeHtml(s.lastError)}">last error: ${escapeHtml(
+                  s.lastError,
+                )}${s.lastErrorTs ? " (" + ago(snap.now, s.lastErrorTs) + ")" : ""}</div>`
+              : "";
+
+        row.innerHTML =
+          `<span class="admin-hs-dot"></span>` +
+          `<span class="admin-hs-main">` +
+          `<div class="admin-hs-label">${escapeHtml(s.label)}</div>` +
+          (host ? `<div class="admin-hs-url" title="${escapeHtml(s.url!)}">${escapeHtml(host)}</div>` : "") +
+          (infoLine ? `<div class="admin-hs-info">${escapeHtml(infoLine)}</div>` : "") +
+          errLine +
+          `</span>` +
+          `<span class="admin-hs-times">` +
+          `poll: <b>${s.lastPollTs ? ago(snap.now, s.lastPollTs) : "—"}</b><br/>` +
+          `data: <b>${s.lastDataTs ? ago(snap.now, s.lastDataTs) : "—"}</b>` +
+          `</span>`;
+        el.appendChild(row);
+      }
+    }
+  }
+
   function renderChart(daily: DailyPoint[]) {
     const chart = document.getElementById("admin-chart");
     if (!chart) return;
@@ -117,8 +235,7 @@ export function attachAdmin(map: maplibregl.Map, serverHttp: string) {
       chart.textContent = "No data yet";
       return;
     }
-    let max = 1;
-    daily.forEach((d) => (max = Math.max(max, d.count)));
+    const max = daily.reduce((m, d) => Math.max(m, d.count), 0) || 1;
     const n = daily.length;
     const labelStep = Math.ceil(n / 20);
     const showValues = n <= 31;
@@ -128,12 +245,16 @@ export function attachAdmin(map: maplibregl.Map, serverHttp: string) {
     daily.forEach((d, i) => {
       const col = document.createElement("div");
       col.className = "admin-chart-col";
+      // Percentage of the FIXED-height track, so bars scale linearly against
+      // the max regardless of the label heights around them.
       const pct = (d.count / max) * 100;
       const showLabel = i % labelStep === 0 || i === n - 1;
       const label = d.date.slice(5);
       col.innerHTML =
         (showValues ? '<span class="admin-chart-value">' + (d.count || "") + "</span>" : "") +
-        '<span class="admin-chart-bar" style="height:' + pct + '%"></span>' +
+        '<span class="admin-chart-track"><span class="admin-chart-bar" style="height:' +
+        pct.toFixed(1) +
+        '%"></span></span>' +
         '<span class="admin-chart-date">' + (showLabel ? label : "") + "</span>";
       col.title = d.date + ": " + d.count + " visits";
       bars.appendChild(col);
@@ -189,4 +310,34 @@ export function attachAdmin(map: maplibregl.Map, serverHttp: string) {
       list.appendChild(row);
     });
   }
+}
+
+/** "12s ago", "3m ago", "2h ago" from two epoch-ms timestamps. */
+function ago(now: number, then: number): string {
+  const s = Math.max(0, Math.round((now - then) / 1000));
+  if (s < 5) return "just now";
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+/** Host (+ short path) of a URL for compact display. */
+function hostOf(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.host + (u.pathname !== "/" ? u.pathname : "");
+  } catch {
+    return url;
+  }
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }

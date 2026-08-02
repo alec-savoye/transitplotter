@@ -4,16 +4,42 @@
 #   docker compose run --rm build-static     # download+cache gtfs_static.sqlite
 #   docker compose up server web              # run the app
 #
-# Large cached assets (the GTFS SQLite) live OFF the boot drive, bind-mounted
-# from GTFS_CACHE_HOST into /cache. Only source/config lives under the repo.
+# Large cached assets (the GTFS SQLite) live OFF the repo, bind-mounted from
+# GTFS_CACHE_HOST into /cache. Only source/config lives under the repo.
+#
+# Set GTFS_CACHE_HOST in a local .env (see .env.example) to the host directory
+# where you want persistent data (the SQLite DB, JSON stores, and the
+# container's node_modules) stored. Defaults to ./.cache under the repo.
 
 x-cache-env: &cache-env
   GTFS_CACHE_DIR: /cache
 
 x-cache-volume: &cache-volume
   type: bind
-  source: ${GTFS_CACHE_HOST:-/srv/active-raid/LIBRARIES/247/transitplotter}
+  source: ${GTFS_CACHE_HOST:-./.cache}
   target: /cache
+
+# node_modules also live under GTFS_CACHE_HOST, bind-mounted from the data
+# folder. These shadow the host repo's (gitignored) node_modules so the
+# container keeps its own installed, container-arch-built deps. They must be
+# populated with `docker compose run --rm server npm install` after a fresh
+# checkout or a dependency change. See MAINTENANCE.md §12.
+x-nm-root: &nm-root
+  type: bind
+  source: ${GTFS_CACHE_HOST:-./.cache}/node_modules/root
+  target: /app/node_modules
+x-nm-shared: &nm-shared
+  type: bind
+  source: ${GTFS_CACHE_HOST:-./.cache}/node_modules/shared
+  target: /app/shared/node_modules
+x-nm-server: &nm-server
+  type: bind
+  source: ${GTFS_CACHE_HOST:-./.cache}/node_modules/server
+  target: /app/server/node_modules
+x-nm-web: &nm-web
+  type: bind
+  source: ${GTFS_CACHE_HOST:-./.cache}/node_modules/web
+  target: /app/web/node_modules
 
 services:
   # Backend: polls MTA feeds, computes positions, serves WS + /routes.
@@ -23,7 +49,7 @@ services:
     # Auto-start on Docker daemon startup and recover from crashes.
     restart: unless-stopped
     ports:
-      # host 8090 (8080 is taken by pihole); container still 8080
+      # host 8090 -> container 8080. Change the host side if 8090 is taken.
       - "8090:8080"
     environment:
       <<: *cache-env
@@ -32,10 +58,10 @@ services:
       BUS_API_KEY: ${BUS_API_KEY:-}
     volumes:
       - ./:/app
-      - /app/node_modules
-      - /app/shared/node_modules
-      - /app/server/node_modules
-      - /app/web/node_modules
+      - *nm-root
+      - *nm-shared
+      - *nm-server
+      - *nm-web
       - *cache-volume
 
   # Frontend: Vite dev server (dumb renderer).
@@ -50,13 +76,17 @@ services:
     # browser's location hostname (see web/src/config.ts), so LAN clients hit
     # the machine's IP instead of their own localhost. Set these only to pin a
     # specific backend host when merging into another deployment.
-    environment: {}
+    #
+    # VITE_ALLOWED_HOSTS: comma-separated public hostname(s) the dev server is
+    # reverse-proxied under. Unset -> Vite allows all hosts (see vite.config.ts).
+    environment:
+      VITE_ALLOWED_HOSTS: ${VITE_ALLOWED_HOSTS:-}
     volumes:
       - ./:/app
-      - /app/node_modules
-      - /app/shared/node_modules
-      - /app/server/node_modules
-      - /app/web/node_modules
+      - *nm-root
+      - *nm-shared
+      - *nm-server
+      - *nm-web
 
   # One-shot: download the MTA static ZIP and cache it as SQLite off-boot.
   # Behind a profile so it does NOT run on `docker compose up`; invoke with:
@@ -69,5 +99,5 @@ services:
       <<: *cache-env
     volumes:
       - ./:/app
-      - /app/node_modules
+      - *nm-root
       - *cache-volume

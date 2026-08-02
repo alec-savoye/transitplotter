@@ -19,6 +19,7 @@ are, and what still needs work. Read the README first if you haven't.
 4. [Module reference — server](#4-module-reference--server)
 5. [Module reference — web](#5-module-reference--web)
 6. [The shared wire contract](#6-the-shared-wire-contract)
+6.5 [The motion model (interpolation)](#65-the-motion-model-interpolation)
 7. [Interfaces between modules](#7-interfaces-between-modules)
 8. [Tunable parameters (the knobs)](#8-tunable-parameters-the-knobs)
 9. [Common bugs and how to address them](#9-common-bugs-and-how-to-address-them)
@@ -40,9 +41,12 @@ Instead:
   each train it figures out *which segment it's on* (previous stop → next stop),
   slices the real curved polyline for that segment, and ships that little
   polyline plus the two schedule times (`d0` depart, `d1` arrive) to the browser.
-- The **browser** does the animation. Every frame it computes
-  `progress = (now - d0) / (d1 - d0)` and places the train that fraction of the
-  way along the polyline (by arc length). That's why motion looks smooth even
+- The **browser** does the animation. It moves each train along its polyline
+  using a **trapezoidal speed profile** (accelerate out of a stop, cruise,
+  decelerate in, dwell) and an **along-track follower** that carries position
+  across refreshes so it never teleports. (See §3.5 — this replaced the old
+  naive `progress = (now - d0)/(d1 - d0)` constant-speed model, which caused the
+  whole fleet to jolt on every feed refresh.) That's why motion looks smooth even
   though the server only speaks every ~20 seconds.
 
 Buses and ferries are easier: their feeds **do** include GPS, so the server just
@@ -172,6 +176,9 @@ as "small / medium / large."
 - **`bus.ts`** — MTA Bus (OneBusAway) realtime → `ActiveLeg[]`. Real GPS,
   straight-line hop to next stop (no street geometry). `busBorough()` maps route
   prefixes to borough codes. Ids prefixed `B:`, `mode:"bus"`.
+- **`traffic.ts`** — Estimated car count (not `ActiveLeg`s — a scalar per poll).
+  Keyless NYC DOT Traffic Speeds → Greenshields density → citywide estimate,
+  calibrated to MTA CRZ entries. See the store description above and §6.6.
 - **`legwire.ts`** — Converts `ActiveLeg[]` → the compact `TrainLeg[]` wire
   format: slices the shape polyline to the active segment, **clamps implausible
   speeds** (`MAX_SPEED_MPS`), computes delay (feed-reported for buses, else
@@ -204,7 +211,30 @@ as "small / medium / large."
 - **`visits.ts`** — `VisitStore`. Visitor analytics: total, per-day, unique
   public IPs geolocated once via ip-api.com. `isPrivateIp()` filters LAN;
   `clientIp()` honors `X-Forwarded-For` (assumes a trusted reverse proxy).
-  Persists `visits.json`. Ported from a sibling "asphoto" project.
+  Persists `visits.json`.
+- **`interp.ts`** — `InterpErrorStore`. Interpolation-error metrics (see §6.5).
+  Each refresh, compares the previous leg's predicted position against ground
+  truth (GPS for bus/ferry; snap magnitude for subway). Reservoir-sampled
+  mean/p50/p95 overall / per-mode / per-route + per-day trend. Persists
+  `interp_errors.json`. Served at `/interp/stats`.
+- **`counts.ts`** — `CountStore`. Records one sample per poll (see `tick.ts`) of
+  active + delayed (predicted delay ≥ 120s) vehicle counts per mode
+  (subway/bus/ferry) plus the estimated `cars` on NYC roads, kept in a rolling
+  48h window and persisted to `counts.json`. Served at `/counts`; drives the two
+  HUD double-click charts (`web/src/counts-modal.ts`). Newer fields
+  (`*Delayed`, `cars`) default to 0 for points persisted before they existed.
+- **`traffic.ts`** — Estimated cars on NYC roads (there is no live "cars in NYC"
+  feed, so this is a synthesized, labeled estimate). Per poll, fetches the live
+  **NYC DOT Traffic Speeds** links (direct TMC tab-separated snapshot, SODA JSON
+  fallback), computes a Greenshields density `k = kjam·(1 − v/vfree)` per link →
+  cars ≈ `k · length_km · lanes`, sums the monitored network, and scales by a
+  factor **α**. α is calibrated daily from the **MTA Congestion Relief Zone**
+  entries (weekly data): true CBD cars-present ≈ `entries/hr · dwell` (Little's
+  law) is matched against the CBD Greenshields sum. All constants live in
+  `feeds.ts` and are documented estimates. Tolerant of feed failure (skips the
+  poll / keeps last α). Note the TMC feed occasionally truncates `link_points`
+  mid-coordinate, so points are clamped to an NYC bounding box before length
+  math.
 
 ### Trip planner
 
@@ -263,10 +293,12 @@ files. If a control looks wrong, the style is in `index.html`, not in a `.ts`.
   3D pitch on desktop / flat on mobile, `pixelRatio` capped on mobile) and every
   layer: routes, ferry routes, disrupted overlay, station dots/pins (canvas
   teardrop icons), bus stops, hotspots heatmap, track-records fill/outline,
-  train bullets, stalled halo, buses, ferries. Exports the visibility/filter
-  setters (`setFerriesVisible`, `setBusBoroughs`, `setBusMinZoom`,
-  `setHotspotsVisible`, `setTrackRecordsVisible`, `setDisruptedRoutes`) and
-  `emptyFC()`.
+  train bullets, stalled halo, buses, ferries. Also a **street-labels** raster
+  overlay (Esri World Transportation tiles) faded in at block-level zoom
+  (`STREET_LABEL_MINZOOM`, default 14) so streets are named when zoomed in
+  without cluttering the city-wide view. Exports the visibility/filter setters
+  (`setFerriesVisible`, `setBusBoroughs`, `setBusMinZoom`, `setHotspotsVisible`,
+  `setTrackRecordsVisible`, `setDisruptedRoutes`) and `emptyFC()`.
 - **`trains.ts`** — `TrainLayer`, the client-side position engine. Ingests leg
   batches, interpolates each vehicle along its polyline by time fraction every
   frame (FPS-capped: 12 mobile / 30 desktop), **eases position transitions
@@ -298,6 +330,24 @@ files. If a control looks wrong, the style is in `index.html`, not in a `.ts`.
 - **`admin.ts`** — Hidden admin overlay (quadruple-click the map). Password
   login → `/admin/stats` → visit totals, daily bar chart, world-map SVG of
   visitor geo-clusters (uses `public/assets/world.svg`).
+- **`isolate.ts`** — `setupIsolate`: the "Isolate" control opens a scrollable
+  picker of subway lines + ferry routes (buses/cars excluded). Selecting one
+  calls `setIsolatedRoute()` in `basemap.ts` to filter the route line, its
+  stations, and the vehicle layers down to that id, fits the view to the line,
+  and shows a corner stats box: vehicle count, split by direction (destination
+  headsign), and any delays — refreshed every 2s from `TrainLayer.trainsOnRoute()`.
+  Exit restores the saved layer filters via `clearIsolate()`. Station membership
+  is a substring match on the concatenated `routes` prop (e.g. "ACE"); express
+  suffixes ("6X") map to the base line's stations.
+- **`counts-modal.ts`** — `setupCountsModal`: double-click / double-tap the Live
+  HUD to open a modal with two stacked 48-hour line charts (active vehicles,
+  then delayed vehicles), each split by subway/bus/ferry. The active chart also
+  plots estimated **cars** on a **right-hand Y axis** (their own scale, since
+  cars are ~1000× the transit counts); the "Cars (est.)" control toggles that
+  series (and the HUD 🚗 line) on/off via `carsShown()` in `main.ts`. Fetches a
+  static snapshot from `/counts` on open; renders inline SVG via a shared
+  `plotSvg` (left/right axis chosen per series). X axis is a fixed 48h window;
+  the pre-data gap is shaded "no data".
 
 ---
 
@@ -319,6 +369,77 @@ Key types:
 both the producer (server) and consumer (web) in the same commit, because
 there's no compile-time gate spanning a deploy boundary — they share the source
 file but deploy as one unit anyway.
+
+`shared/src/kinematics.ts` is a second shared module (imported as
+`@transitplotter/shared/kinematics`). Unlike `types.ts` it contains **runtime
+code** — the motion math used identically by the client renderer and the
+server's error metrics. See §6.5.
+
+---
+
+## 6.5 The motion model (interpolation)
+
+This is the heart of "can I trust the trajectory." It has three layers.
+
+### Why the old model jumped
+The original client used constant-speed interpolation over one stop→stop leg:
+`f = (now - d0)/(d1 - d0)`, position = `f` of the way along the polyline. Five
+things made it jolt on every ~20s refresh:
+
+1. **Constant speed ≠ reality.** Real trains accelerate, cruise, decelerate,
+   dwell. A linear-in-time model is ahead mid-segment and behind near stations,
+   so each refresh delivered a correction.
+2. **Prediction churn.** MTA re-predicts `d1` every poll; the target moves even
+   when the train hasn't.
+3. **Segment hand-off.** Crossing a stop snapped the train to the start of the
+   next leg's polyline.
+4. **Fabricated origin.** When the feed's first listed stop was still ahead, the
+   server set `departTs = nowSec` *every poll*, so the train perpetually "just
+   departed" and lurched.
+5. **Speed-clamp retiming.** `legwire.ts` stretched `d1`, changing `f`
+   discontinuously.
+
+### The fix — three layers
+1. **Trapezoidal speed profile** (`shared/src/kinematics.ts`,
+   `trapezoidDistance`/`trapezoidSpeed`). Distance along the leg follows an
+   accel→cruise→decel curve over `[d0, d1]` (triangular if the leg is too short
+   for a full ramp), then **dwells** at the end. This alone makes markers slow
+   into stations and matches reality, shrinking the per-refresh correction at
+   its source. Verified: monotonic, `d(0)=0`, `d(T)=len`, ∫speed = len.
+2. **Along-track follower** (`web/src/trains.ts`, `TrainLayer.sample`). Each
+   train keeps a rendered along-track position `s` and speed `v`. Instead of
+   snapping to the model target, it *chases* it with bounded acceleration
+   (`MAX_ACCEL`) and a catch-up term (`CATCHUP_GAIN`, capped by
+   `MAX_CATCHUP_MULT`). Motion is monotonic (never reverses). When model and
+   render agree — the common case now — the follower is a no-op.
+3. **Reprojection continuity** (`TrainLayer.update`). On each refresh, the
+   train's last-rendered lng/lat is projected onto the **new** polyline
+   (`projectDistance`) to get `s` in the new frame, so there's no cross-leg jump.
+   If the reprojected point is more than `TELEPORT_GAP_M` from the model target
+   (route/segment change onto unrelated geometry), it jumps directly instead of
+   sliding sideways.
+
+Plus a **server-side data fix** (`state.ts`): the fabricated-origin case
+(#4) now anchors `departTs` to the stable predicted arrival minus the typical
+segment time (`typicalSeconds` from the routing graph) instead of `nowSec`, so
+`d0/d1` stop drifting between polls.
+
+### Measuring it (`/interp/stats`)
+`server/src/interp.ts` (`InterpErrorStore`) records, on every refresh, how far
+the **previous** leg's prediction was from ground truth at the refresh instant:
+- **bus/ferry** legs carry real GPS → *true* interpolation error.
+- **subway** has no GPS → the new leg's modeled position, i.e. the *snap
+  magnitude* the user perceives as a jump (a proxy).
+
+It keeps mean/p50/p95 (reservoir-sampled), broken down overall / per-mode /
+per-route, plus a per-day trend, persisted to `interp_errors.json` in the cache
+dir. Query it:
+```bash
+curl -s http://localhost:8090/interp/stats | jq
+```
+Watch p50/p95 trend **down** as you tune the model. This is the dataset a future
+Phase-3 learner would use to fit per-segment speed/dwell corrections (fed back
+in `legwire.ts` so the wire format stays unchanged).
 
 ---
 
@@ -396,11 +517,19 @@ to find exact lines; they move.
 | `SNAP_K` | `plan.ts` | `4` | How many nearby stations to seed the search from. |
 | `TRANSFER_MAX_M` | `graph.ts` | `250` | Max walking distance for a transfer edge. |
 
+### Motion model
+| Constant | File | Default | Effect |
+| --- | --- | --- | --- |
+| `RAMP_S` | `shared/kinematics.ts` | `8` | Accel/decel ramp time at each end of a leg. Larger = more pronounced slow-in/out; too large on short legs just goes triangular. |
+| `MAX_ACCEL` | `trains.ts` | `1.3` m/s² | Follower's max acceleration. Lower = smoother but laggier catch-up. |
+| `CATCHUP_GAIN` | `trains.ts` | `0.5` /s | How hard the follower closes a position gap. Higher = snappier, riskier. |
+| `MAX_CATCHUP_MULT` | `trains.ts` | `3` | Cap on catch-up speed vs. the leg's mean speed. |
+| `TELEPORT_GAP_M` | `trains.ts` | `400` | Reproject gap beyond which the follower jumps instead of sliding (route/segment change). |
+
 ### Client rendering (`trains.ts`)
 | Constant | Default | Effect |
 | --- | --- | --- |
 | `TARGET_FPS` | `12` mobile / `30` desktop | Vehicle re-render cap. The main mobile-crash safeguard. |
-| `TRANSITION_MS` | `900` | Anti-jolt easing duration when a fresh batch arrives. Raise for smoother, laggier; lower for snappier, jumpier. |
 | `STALL_THRESHOLD_S` | `90` | Feed-staleness age that flags a train as "stalled" (flashing halo). |
 | `HOTSPOT_DELAY_S` | `120` | Delay to count toward a hotspot. |
 | `HOTSPOT_MAX_S` | `600` | Delay mapped to full hotspot intensity. |
@@ -433,11 +562,17 @@ See the README config table. The ones **not** in that table but present in code:
    config (`config.ts` decides the URL from `window.location.protocol`).
 
 ### "Trains jump / jolt every ~20–30s"
-This was fixed with the `TRANSITION_MS` easing in `trains.ts` (each vehicle eases
-from its last-rendered position to the newly computed one). If it comes back:
-- A regression likely reset positions without setting `prevLng/prevLat` +
-  `transStartMs` in `TrainLayer.update()`.
-- Or `TRANSITION_MS` was set to 0. Raise it (900ms is the tuned value).
+This is the motion model (§6.5). It was rebuilt around a trapezoidal profile +
+along-track follower + reprojection continuity. If jumps come back:
+- Check `/interp/stats` — a rising subway p95 quantifies the jump magnitude.
+- A regression likely broke the reprojection in `TrainLayer.update()` (each
+  refresh must reproject last lng/lat onto the new polyline to seed `s`), or the
+  follower's `s`/`v` state stopped persisting across refreshes.
+- `TELEPORT_GAP_M` too low makes normal segment changes teleport; too high makes
+  wrong-geometry snaps slide sideways. `MAX_ACCEL`/`CATCHUP_GAIN` govern
+  smoothness vs. responsiveness.
+- If a specific route drifts badly, look at its `byRoute` error and the
+  segment-selection logic in `state.ts`.
 
 ### "It crashes / freezes on mobile"
 The root cause was rebuilding a ~1000-feature GeoJSON at 60fps. Guards now in
@@ -582,11 +717,45 @@ docker compose run --rm --no-deps -T web \
 Prints `WEB_OK` at the end of this project's convention if you append
 `&& echo WEB_OK`.
 
+### Restarting the server
+The compose services run under `docker compose` from the repo root. Run these
+from there, or pass `--project-directory` / use the `workdir`.
+
+```bash
+# Restart just the backend (picks up on-disk code via tsx watch anyway, but use
+# this to force a clean restart, re-read the static cache, or after a crash):
+docker compose restart server
+
+# Restart the web (Vite) dev server — e.g. after changing vite.config.ts:
+docker compose restart web
+
+# Restart everything:
+docker compose restart
+
+# Full stop + start (also re-reads docker-compose.yml / env changes). `down`
+# lets the server flush its stores gracefully via SIGTERM (see below):
+docker compose down
+docker compose up -d server web
+
+# Rebuild the image first (after Dockerfile or dependency changes), then start:
+docker compose build
+docker compose up -d --build server web
+```
+
+Notes:
+- The server runs `tsx watch`, so editing files under `server/` or `shared/`
+  triggers an automatic reload — a manual restart is usually only needed after a
+  crash, a static-cache rebuild, or an env/compose change.
+- Check it came back up: `docker compose ps` (status `Up`) and
+  `curl -s http://localhost:8090/health` → `ok`.
+- If the container keeps restarting, tail the logs (below) for the stack trace;
+  `tsx` prints the failing file/line.
+
 ### Rebuild the static cache (after MTA schedule updates)
 ```bash
 docker compose run --rm -e FORCE=1 build-static
 ```
-Then restart `server` so `load.ts` re-reads it.
+Then restart `server` so `load.ts` re-reads it (`docker compose restart server`).
 
 ### Tail logs
 ```bash
@@ -595,10 +764,30 @@ docker compose logs -f web
 ```
 
 ### Where persisted data lives
-The bind-mounted cache dir (`GTFS_CACHE_HOST` → `/cache`):
+**No app data lives inside the repo** — everything except the git-tracked source
+(and the Docker image layers themselves) is bind-mounted from the data directory
+`GTFS_CACHE_HOST` (defaults to `./.cache`; set it to an absolute path outside the
+repo to keep data off your boot drive).
+
+The data directory contains:
 - `gtfs_static.sqlite` — static GTFS (rebuild to refresh).
 - `track_records.json` — reliability history (deleting it resets the 7-day clock).
 - `visits.json` — visitor analytics.
+- `interp_errors.json` — interpolation-error metrics (§6.5; delete to reset the
+  baseline before/after a model change).
+- `counts.json` — rolling 48h series of active + delayed vehicle counts
+  (subway/bus/ferry) plus the estimated car count for the HUD charts;
+  self-prunes to the window (delete to clear history).
+- `node_modules/{root,shared,server,web}` — the containers' installed
+  dependencies, bind-mounted over `/app{,/shared,/server,/web}/node_modules` so
+  they stay out of the repo and shadow the host repo's (gitignored) copies.
+  After a fresh checkout or a dependency change, (re)populate with:
+  `docker compose run --rm server npm install`. Native addons (e.g.
+  `better-sqlite3`) are built for the container here, so install via the
+  container, not the host.
+
+> Docker image layers still live under Docker's storage (`/var/lib/docker` by
+> default); only the app's own data is redirected to `GTFS_CACHE_HOST`.
 
 ### Graceful shutdown
 `index.ts` traps SIGTERM/SIGINT and flushes `TrackRecordStore` + `VisitStore`.

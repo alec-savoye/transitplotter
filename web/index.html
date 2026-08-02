@@ -14,7 +14,9 @@
         background: rgba(0,0,0,0.7); color: #fff; padding: 8px 11px;
         border-radius: 8px; font-size: 12px; line-height: 1.35;
         min-width: 150px; box-shadow: 0 1px 6px rgba(0,0,0,0.35);
+        cursor: pointer; user-select: none; -webkit-user-select: none;
       }
+      .hud-hint { color: #64748b; font-size: 10px; margin-top: 3px; }
       .hud-status { font-weight: 700; font-size: 13px; margin-bottom: 3px; }
       .hud-status.live { color: #4ade80; }
       .hud-status.connecting { color: #fbbf24; }
@@ -26,6 +28,8 @@
         font-variant-numeric: tabular-nums;
       }
       .hud-sub { color: #cbd5e1; font-size: 11px; }
+      .hud-est { color: #94a3b8; font-style: italic; }
+      .hud-lastpush { color: #94a3b8; font-size: 10px; margin: -1px 0 3px; }
 
       /* Stacked control panel (top-left, under the HUD) */
       #controls {
@@ -227,6 +231,49 @@
         background: #147a3c; color: #fff; font-weight: 700; font-size: 13px; cursor: pointer;
       }
 
+      /* Vehicle-count 48h chart modal (double-click the HUD) */
+      #counts-modal {
+        position: absolute; inset: 0; z-index: 45; display: none;
+        align-items: center; justify-content: center;
+        background: rgba(0,0,0,0.5);
+      }
+      #counts-modal.show { display: flex; }
+      #counts-modal .cm-card {
+        background: #14181f; color: #e5e7eb; border-radius: 12px; padding: 18px 20px;
+        width: 90%; max-width: 560px; max-height: 90vh; overflow-y: auto;
+        box-shadow: 0 6px 30px rgba(0,0,0,0.6);
+        font-family: system-ui, sans-serif;
+      }
+      #counts-modal h3 { margin: 0 0 2px; font-size: 16px; color: #fff; }
+      #counts-modal .cm-sub { font-size: 11px; color: #94a3b8; margin-bottom: 10px; }
+      #counts-modal .cm-sub-delay { margin-top: 16px; }
+      #counts-modal .cm-chart { min-height: 200px; }
+      #counts-modal .cm-empty { font-size: 12px; color: #94a3b8; padding: 24px 0; text-align: center; }
+      #counts-modal .cm-legend {
+        display: flex; gap: 16px; flex-wrap: wrap; margin: 10px 0 2px;
+        font-size: 12px; font-variant-numeric: tabular-nums;
+      }
+      #counts-modal .cm-legend span { display: inline-flex; align-items: center; gap: 5px; }
+      #counts-modal .cm-swatch { width: 12px; height: 3px; border-radius: 2px; display: inline-block; }
+      #counts-modal .cm-axis-note { color: #64748b; font-size: 10px; font-style: italic; }
+      #counts-modal .cm-close {
+        margin-top: 14px; width: 100%; padding: 8px; border: none; border-radius: 6px;
+        background: #334155; color: #fff; font-weight: 700; font-size: 13px; cursor: pointer;
+      }
+      /* Chart SVG (dark theme) */
+      .cm-svg { display: block; background: #0d1017; border-radius: 6px; width: 100%; }
+      .cm-grid { stroke: #263041; stroke-width: 0.5; }
+      .cm-ylab, .cm-xlab { fill: #64748b; font-size: 8px; }
+      .cm-ylab { text-anchor: end; }
+      .cm-ylab-right { text-anchor: start; fill: #f472b6; }
+      .cm-line { fill: none; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+      .cm-line.subway { stroke: #fbbf24; }
+      .cm-line.bus { stroke: #4ade80; }
+      .cm-line.ferry { stroke: #38bdf8; }
+      .cm-line.cars { stroke: #f472b6; }
+      .cm-nodata-band { fill: rgba(148,163,184,0.08); }
+      .cm-nodata-lab { fill: #64748b; font-size: 8px; text-anchor: middle; }
+
       /* Station arrivals panel */
       #station-panel {
         position: absolute; top: 0; right: 0; z-index: 20;
@@ -368,6 +415,84 @@
       .al-bus > summary:hover { background: #e9f3fb; }
       .al-bus[open] > summary { border-bottom: 1px solid #eee; }
 
+      /* Isolate picker (centered modal) */
+      #isolate-picker {
+        position: absolute; inset: 0; z-index: 46; display: none;
+        align-items: center; justify-content: center; background: rgba(0,0,0,0.5);
+      }
+      #isolate-picker.show { display: flex; }
+      .iso-picker-card {
+        background: #14181f; color: #e5e7eb; border-radius: 12px;
+        width: 90%; max-width: 380px; max-height: 80vh; display: flex;
+        flex-direction: column; box-shadow: 0 6px 30px rgba(0,0,0,0.6);
+        font-family: system-ui, sans-serif; overflow: hidden;
+      }
+      .iso-picker-head {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 14px 16px 4px;
+      }
+      .iso-picker-head h3 { margin: 0; font-size: 16px; color: #fff; }
+      .iso-picker-close {
+        background: none; border: none; color: #9aa4af; font-size: 16px; cursor: pointer;
+      }
+      .iso-picker-sub { font-size: 11px; color: #94a3b8; padding: 0 16px 8px; }
+      .iso-list { overflow-y: auto; padding: 4px 10px 12px; }
+      .iso-group {
+        font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+        color: #7d8894; margin: 10px 6px 4px; border-top: 1px solid #232a31; padding-top: 8px;
+      }
+      .iso-row {
+        display: flex; align-items: center; gap: 10px; width: 100%;
+        background: none; border: none; color: #e5e7eb; text-align: left;
+        padding: 7px 8px; border-radius: 6px; cursor: pointer; font-size: 13px;
+      }
+      .iso-row:hover { background: #1f2733; }
+      .iso-bullet {
+        flex: none; display: inline-flex; align-items: center; justify-content: center;
+        width: 24px; height: 24px; border-radius: 50%; color: #fff;
+        font-weight: 700; font-size: 12px; text-shadow: 0 1px 1px rgba(0,0,0,0.4);
+      }
+      .iso-bullet.lg { width: 30px; height: 30px; font-size: 14px; }
+      .iso-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+      /* Isolate live stats dialog (corner box) */
+      #isolate-dialog {
+        position: absolute; top: 10px; right: 10px; z-index: 30; display: none;
+        width: 250px; background: rgba(10,14,20,0.92); color: #e5e7eb;
+        border-radius: 10px; padding: 12px 14px; box-shadow: 0 2px 12px rgba(0,0,0,0.5);
+        font-family: system-ui, sans-serif;
+      }
+      #isolate-dialog.show { display: block; }
+      .iso-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+      .iso-title { font-size: 13px; font-weight: 600; line-height: 1.2; }
+      .iso-total { font-size: 13px; margin-bottom: 6px; }
+      .iso-total b { font-size: 17px; }
+      .iso-none { font-size: 12px; color: #94a3b8; }
+      .iso-delay { font-size: 12px; font-weight: 600; margin-bottom: 8px; }
+      .iso-delay.bad { color: #ff8f8f; }
+      .iso-delay.ok { color: #6ee7a8; }
+      /* Compact per-vehicle table (ID / direction / next stop) */
+      .iso-table-wrap { max-height: 40vh; overflow-y: auto; margin-bottom: 10px; }
+      .iso-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+      .iso-table th {
+        text-align: left; font-weight: 600; color: #7d8894; font-size: 10px;
+        text-transform: uppercase; letter-spacing: 0.03em; padding: 0 4px 3px;
+        position: sticky; top: 0; background: #0a0e14;
+      }
+      .iso-table td {
+        padding: 2px 4px; border-top: 1px solid #1e2733; vertical-align: top;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 90px;
+      }
+      .iso-table tr.late td { color: #ffd0d0; background: rgba(185,28,28,0.55); }
+      .iso-table tr.late td:first-child { border-left: 3px solid #ff5a5a; }
+      .iso-t-dir { color: #cbd5e1; }
+      .iso-t-ns { color: #9aa4af; }
+      .iso-exit {
+        width: 100%; padding: 8px; border: none; border-radius: 6px;
+        background: #b91c1c; color: #fff; font-weight: 700; font-size: 13px; cursor: pointer;
+      }
+      .iso-exit:hover { background: #dc2626; }
+
       /* Attribution / disclaimer footer */
       #disclaimer {
         position: absolute; bottom: 0; right: 0; z-index: 10;
@@ -415,13 +540,18 @@
         color: #7d8894; margin: 16px 0 6px; border-top: 1px solid #232a31; padding-top: 10px;
       }
       .admin-chart-bars {
-        display: flex; align-items: flex-end; gap: 2px; height: 120px;
-        border-bottom: 1px solid #232a31;
+        display: flex; align-items: flex-end; gap: 2px;
       }
-      .admin-chart-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; min-width: 0; }
-      .admin-chart-value { font-size: 9px; color: #9aa4af; }
+      .admin-chart-col { flex: 1; display: flex; flex-direction: column; align-items: center; min-width: 0; }
+      .admin-chart-value { font-size: 9px; color: #9aa4af; height: 12px; line-height: 12px; }
+      /* Fixed-height track so bar percentages map to a consistent baseline
+         regardless of the value/date label heights around them. */
+      .admin-chart-track {
+        width: 100%; height: 120px; display: flex; align-items: flex-end;
+        justify-content: center; border-bottom: 1px solid #232a31;
+      }
       .admin-chart-bar { width: 70%; background: #0b60d6; border-radius: 2px 2px 0 0; min-height: 1px; }
-      .admin-chart-date { font-size: 8px; color: #7d8894; margin-top: 2px; white-space: nowrap; transform: rotate(-45deg); transform-origin: top left; }
+      .admin-chart-date { font-size: 8px; color: #7d8894; margin-top: 8px; white-space: nowrap; transform: rotate(-45deg); transform-origin: top left; height: 10px; }
       .admin-map {
         position: relative; background: #0c1013; border-radius: 6px; margin: 6px 0;
         aspect-ratio: 2 / 1; overflow: hidden;
@@ -436,6 +566,32 @@
       .admin-stat-bar { flex: 1; height: 8px; background: #232a31; border-radius: 4px; overflow: hidden; }
       .admin-stat-fill { display: block; height: 100%; background: #0b60d6; }
       .admin-stat-count { flex: none; font-variant-numeric: tabular-nums; color: #cfe6ff; }
+
+      /* Data-source health table */
+      .admin-health { display: flex; flex-direction: column; gap: 8px; }
+      .admin-health-group { font-size: 11px; font-weight: 700; color: #7d8894; margin-top: 4px; }
+      .admin-hs-row {
+        display: grid; grid-template-columns: 12px 1fr auto; gap: 8px;
+        align-items: start; padding: 6px 8px; background: #0f141a;
+        border-radius: 6px; border-left: 3px solid #566;
+      }
+      .admin-hs-row.ok { border-left-color: #2ecc71; }
+      .admin-hs-row.bad { border-left-color: #ff5a5a; }
+      .admin-hs-dot {
+        width: 8px; height: 8px; border-radius: 50%; margin-top: 4px; background: #667;
+      }
+      .admin-hs-row.ok .admin-hs-dot { background: #2ecc71; }
+      .admin-hs-row.bad .admin-hs-dot { background: #ff5a5a; }
+      .admin-hs-main { min-width: 0; }
+      .admin-hs-label { font-size: 13px; font-weight: 600; color: #e8edf2; }
+      .admin-hs-url {
+        font-size: 10px; color: #6b7682; overflow: hidden; text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .admin-hs-info { font-size: 11px; color: #9aa4af; margin-top: 2px; }
+      .admin-hs-err { font-size: 11px; color: #ff8f8f; margin-top: 2px; word-break: break-word; }
+      .admin-hs-times { text-align: right; font-size: 10px; color: #8b96a2; white-space: nowrap; }
+      .admin-hs-times b { color: #cfe6ff; font-weight: 600; }
     </style>
   </head>
   <body>
@@ -445,6 +601,8 @@
       <button id="hotspots-toggle" class="ctl-btn" title="Show delay hotspots">Hotspots: Off</button>
       <button id="trackrecords-toggle" class="ctl-btn" title="Show reliability track records">Track Records: Off</button>
       <button id="ferries-toggle" class="ctl-btn" title="Show NYC Ferry boats">Ferries: On</button>
+      <button id="cars-toggle" class="ctl-btn" title="Show the estimated car count (from live traffic speeds)">Cars (est.): On</button>
+      <button id="isolate-toggle" class="ctl-btn" title="Show a single subway or ferry line on its own">Isolate</button>
       <button id="planner-toggle" class="ctl-btn" title="Plan a trip">Trip Planner: Off</button>
       <button id="view-toggle" class="ctl-btn" title="Force mobile or desktop layout (Auto detects your device)">View: Auto</button>
       <div id="bus-group">
@@ -469,6 +627,32 @@
         <button class="tr-close" type="button">Got it</button>
       </div>
     </div>
+    <div id="counts-modal">
+      <div class="cm-card">
+        <h3>Vehicles over the last 48 hours</h3>
+        <div class="cm-sub">Active subway trains, buses, ferries, and estimated cars on NYC roads.</div>
+        <div class="cm-chart cm-chart-active"></div>
+        <div class="cm-legend cm-legend-active"></div>
+        <div class="cm-sub cm-sub-delay">Delayed vehicles (predicted delay ≥ 2 min).</div>
+        <div class="cm-chart cm-chart-delay"></div>
+        <div class="cm-legend cm-legend-delay"></div>
+        <button class="cm-close" type="button">Close</button>
+      </div>
+    </div>
+    <div id="isolate-picker">
+      <div class="iso-picker-card">
+        <div class="iso-picker-head">
+          <h3>Isolate a line</h3>
+          <button class="iso-picker-close" type="button" aria-label="Close">✕</button>
+        </div>
+        <div class="iso-picker-sub">Pick a subway line or ferry route to view on its own.</div>
+        <div class="iso-list"></div>
+      </div>
+    </div>
+    <div id="isolate-dialog">
+      <div class="iso-body"></div>
+      <button class="iso-exit" type="button">Exit Isolate</button>
+    </div>
     <div id="admin-overlay">
       <div class="admin-card">
         <div class="admin-head">
@@ -484,6 +668,8 @@
           </form>
         </div>
         <div id="admin-content" class="admin-content hidden">
+          <div class="admin-section-title">Data source status</div>
+          <div class="admin-health" id="admin-health"></div>
           <div class="admin-total" id="admin-total"></div>
           <div class="admin-section-title">Visits over time</div>
           <div class="admin-chart" id="admin-chart"></div>

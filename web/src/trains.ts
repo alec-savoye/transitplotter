@@ -5,6 +5,15 @@
 
 import type maplibregl from "maplibre-gl";
 import type { ServerMessage, TrainLeg, TrainStatus, RouteMeta } from "@transitplotter/shared";
+import {
+  buildCumMeters,
+  trapezoidDistance,
+  trapezoidSpeed,
+  projectDistance,
+  locate,
+  type CumPath,
+  type LngLat,
+} from "@transitplotter/shared/kinematics";
 import { emptyFC } from "./basemap.js";
 import { IS_MOBILE } from "./config.js";
 
@@ -30,18 +39,23 @@ interface Leg {
   hts: number; // feed header epoch s
   dly: number; // estimated delay seconds (0 if on time/unknown)
   /** Polyline points [lng,lat]. */
-  pts: [number, number][];
-  /** Cumulative planar distance at each point (arbitrary units). */
+  pts: LngLat[];
+  /** Cumulative metric distance (meters) at each point. */
   cum: number[];
-  /** Total length. */
+  /** Total length (meters). */
   len: number;
   /** epoch ms when this leg was received (for stall clock). */
   recvMs: number;
-  /** Rendered position at the instant this leg replaced the previous one. */
-  prevLng?: number;
-  prevLat?: number;
-  /** epoch ms when the smoothing transition to this leg began. */
-  transStartMs?: number;
+
+  // --- along-track continuity follower state ---
+  /**
+   * Rendered distance (meters) along THIS leg's polyline. Persisted across
+   * frames so the vehicle advances smoothly (and never teleports) rather than
+   * snapping to the freshly computed target on each feed refresh.
+   */
+  s: number;
+  /** Rendered along-track speed (m/s) of the follower, for accel limiting. */
+  v: number;
 }
 
 interface Sample {
@@ -49,25 +63,6 @@ interface Sample {
   lat: number;
   brg: number;
   status: TrainStatus;
-}
-
-function buildCum(pts: [number, number][]): { cum: number[]; len: number } {
-  const cum = [0];
-  for (let i = 1; i < pts.length; i++) {
-    const dx = pts[i][0] - pts[i - 1][0];
-    const dy = pts[i][1] - pts[i - 1][1];
-    cum[i] = cum[i - 1] + Math.hypot(dx, dy);
-  }
-  return { cum, len: cum[cum.length - 1] || 0 };
-}
-
-function bearing(a: [number, number], b: [number, number]): number {
-  const φ1 = (a[1] * Math.PI) / 180;
-  const φ2 = (b[1] * Math.PI) / 180;
-  const Δλ = ((b[0] - a[0]) * Math.PI) / 180;
-  const y = Math.sin(Δλ) * Math.cos(φ2);
-  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
-  return (((Math.atan2(y, x) * 180) / Math.PI) + 360) % 360;
 }
 
 /** A train's current rendered state, exposed for hotspot summaries. */
@@ -85,6 +80,8 @@ export interface LiveTrain {
   boro: string;
   /** Feed header time (epoch seconds) = when this delay was last observed. */
   asOf: number;
+  /** Follower along-track speed (m/s) at render time, carried across refreshes. */
+  v: number;
 }
 
 /**
@@ -96,13 +93,30 @@ const TARGET_FPS = IS_MOBILE ? 12 : 30;
 const FRAME_MIN_MS = 1000 / TARGET_FPS;
 
 /**
- * When a fresh batch of legs arrives (~every 20–30s), each train's schedule
- * window (d0/d1) and polyline are recomputed, so the interpolated position can
- * snap to a slightly different spot — producing a synchronized "jolt" across
- * all vehicles. To hide it, we ease from each train's last-rendered position to
- * its new interpolated position over this many milliseconds.
+ * Continuity follower tuning. Instead of snapping to the trapezoidal target on
+ * every feed refresh (which caused the whole fleet to jolt in sync), each
+ * vehicle keeps an along-track position `s` and speed `v` and *chases* the
+ * model target with bounded acceleration. When the model and the rendered
+ * position agree (the common case now that we model accel/dwell), the follower
+ * is a no-op; when they disagree, it closes the gap smoothly and monotonically.
  */
-const TRANSITION_MS = 900;
+
+/** Max along-track acceleration the follower may apply (m/s²). */
+const MAX_ACCEL = 1.3;
+/**
+ * How aggressively the follower's target speed reacts to the position error
+ * (1/s). Higher = closes gaps faster (snappier, riskier); lower = smoother,
+ * laggier. The gain is applied as: vTarget = modelSpeed + gain * (target - s).
+ */
+const CATCHUP_GAIN = 0.5;
+/** Hard cap on catch-up speed as a multiple of the leg's mean speed. */
+const MAX_CATCHUP_MULT = 3;
+/**
+ * If the reprojected position is more than this far (m) from the model target
+ * on refresh — e.g. a route/segment change — jump directly instead of sliding
+ * across unrelated geometry.
+ */
+const TELEPORT_GAP_M = 400;
 
 export class TrainLayer {
   private legs = new Map<string, Leg>();
@@ -111,6 +125,8 @@ export class TrainLayer {
   private live = new Map<string, LiveTrain>();
   /** Wall-clock ms of the last rendered frame (for FPS throttling). */
   private lastFrameMs = 0;
+  /** Cumulative-path cache keyed by train id (parallel to `legs`). */
+  private paths = new Map<string, CumPath>();
 
   constructor(private map: maplibregl.Map, routes: RouteMeta[]) {
     for (const r of routes) this.colors.set(r.id, r.color);
@@ -135,17 +151,48 @@ export class TrainLayer {
     return out;
   }
 
+  /** All currently-rendered vehicles on a given route id (for Isolate). */
+  trainsOnRoute(routeId: string): LiveTrain[] {
+    const out: LiveTrain[] = [];
+    for (const t of this.live.values()) if (t.route === routeId) out.push(t);
+    return out;
+  }
+
   /** Ingest a fresh batch of legs from the server. */
   update(msg: ServerMessage) {
     const recvMs = Date.now();
+    const nowSec = recvMs / 1000;
     const seen = new Set<string>();
     for (const l of msg.legs) {
       seen.add(l.id);
-      const pts = l.path;
-      const { cum, len } = buildCum(pts);
-      // Anchor the smoothing transition at the position we last rendered for
-      // this train (if any), so the update eases in instead of snapping.
-      const last = this.live.get(l.id);
+      const pts = l.path as LngLat[];
+      const cp = buildCumMeters(pts);
+
+      // Continuity: carry the follower's position across the leg refresh by
+      // reprojecting the last-rendered lng/lat onto the NEW polyline. This puts
+      // both the old rendered position and the new model target in the same
+      // 1-D (along-track) frame so the follower can chase without teleporting.
+      const prev = this.live.get(l.id);
+      const modelTarget = trapezoidDistance(nowSec - l.d0, l.d1 - l.d0, cp.len);
+      let s: number;
+      let v: number;
+      if (prev && pts.length > 1) {
+        const reproj = projectDistance(pts, cp, prev.lng, prev.lat);
+        const gap = Math.abs(modelTarget - reproj);
+        if (gap > TELEPORT_GAP_M) {
+          // Unrelated geometry (route/segment change): jump to the model.
+          s = modelTarget;
+        } else {
+          // Never allow the follower to sit *ahead* of the model target by a
+          // lot (would imply reversing); clamp behind-or-at target.
+          s = Math.min(reproj, modelTarget);
+        }
+        v = prev.v ?? 0;
+      } else {
+        s = modelTarget;
+        v = 0;
+      }
+
       this.legs.set(l.id, {
         r: l.r,
         ns: l.ns,
@@ -160,56 +207,74 @@ export class TrainLayer {
         hts: l.hts,
         dly: l.dly ?? 0,
         pts,
-        cum,
-        len,
+        cum: cp.cum,
+        len: cp.len,
         recvMs,
-        prevLng: last?.lng,
-        prevLat: last?.lat,
-        transStartMs: last ? recvMs : undefined,
+        s,
+        v,
       });
+      this.paths.set(l.id, cp);
     }
     // Drop trains no longer reported.
     for (const id of [...this.legs.keys()]) {
-      if (!seen.has(id)) this.legs.delete(id);
+      if (!seen.has(id)) {
+        this.legs.delete(id);
+        this.paths.delete(id);
+      }
     }
   }
 
-  /** Interpolate a leg's position at wall-clock time `nowSec` (epoch seconds). */
-  private sample(l: Leg, nowSec: number): Sample {
-    const span = l.d1 - l.d0;
-    let f = span > 0 ? (nowSec - l.d0) / span : 1;
-    f = Math.max(0, Math.min(1, f));
+  /**
+   * Advance a leg's along-track follower by `dtSec` and return its rendered
+   * position. The trapezoidal model provides the physically-plausible target
+   * distance + speed; the follower chases it with bounded acceleration so the
+   * marker never teleports and never reverses.
+   */
+  private sample(l: Leg, cp: CumPath, nowSec: number, dtSec: number): Sample {
+    const T = l.d1 - l.d0;
+    const elapsed = nowSec - l.d0;
 
     let status: TrainStatus = "moving";
-    if (f <= 0) status = "stopped";
-    // Stall detection: feed header significantly older than now.
+    if (elapsed <= 0) status = "stopped";
     if (nowSec - l.hts > STALL_THRESHOLD_S) status = "stalled";
 
-    const pts = l.pts;
-    if (pts.length === 1) {
-      return { lng: pts[0][0], lat: pts[0][1], brg: 0, status };
+    if (l.pts.length === 1 || l.len <= 0) {
+      const p = l.pts[0] ?? [0, 0];
+      l.s = 0;
+      l.v = 0;
+      return { lng: p[0], lat: p[1], brg: 0, status };
     }
 
-    const target = f * l.len;
-    // Binary search the cumulative array for the segment containing `target`.
-    let lo = 0;
-    let hi = l.cum.length - 1;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (l.cum[mid] < target) lo = mid + 1;
-      else hi = mid;
+    // Physically-plausible target from the trapezoidal profile.
+    const target = trapezoidDistance(elapsed, T, l.len);
+    const modelSpeed = trapezoidSpeed(elapsed, T, l.len);
+    const meanSpeed = T > 0 ? l.len / T : 0;
+
+    // Follower: choose a target speed that both moves with the model and closes
+    // any residual gap, then limit acceleration and integrate. Monotonic (never
+    // negative) so trains don't visually reverse.
+    const gap = target - l.s;
+    let vTarget = modelSpeed + CATCHUP_GAIN * gap;
+    const vCap = Math.max(modelSpeed, meanSpeed) * MAX_CATCHUP_MULT;
+    vTarget = Math.max(0, Math.min(vTarget, vCap));
+
+    const dv = vTarget - l.v;
+    const maxDv = MAX_ACCEL * dtSec;
+    l.v += Math.max(-maxDv, Math.min(maxDv, dv));
+    if (l.v < 0) l.v = 0;
+    l.s += l.v * dtSec;
+
+    // Clamp to the leg; hold (dwell) at the end until the next leg arrives.
+    if (l.s >= l.len) {
+      l.s = l.len;
+      l.v = 0;
     }
-    const i = Math.max(1, lo);
-    const a = pts[i - 1];
-    const b = pts[i];
-    const segLen = l.cum[i] - l.cum[i - 1] || 1;
-    const t = (target - l.cum[i - 1]) / segLen;
-    return {
-      lng: a[0] + (b[0] - a[0]) * t,
-      lat: a[1] + (b[1] - a[1]) * t,
-      brg: bearing(a, b),
-      status,
-    };
+    if (l.s < 0) l.s = 0;
+
+    if (l.s <= 0) status = elapsed <= 0 ? "stopped" : status;
+
+    const loc = locate(l.pts, cp, l.s);
+    return { lng: loc.lng, lat: loc.lat, brg: loc.brg, status };
   }
 
   private frame() {
@@ -221,6 +286,9 @@ export class TrainLayer {
       requestAnimationFrame(() => this.frame());
       return;
     }
+    // Delta since the last *rendered* frame, for the follower integration.
+    // Clamp to avoid a huge jump after a tab was backgrounded.
+    const dtSec = this.lastFrameMs > 0 ? Math.min(1, (now - this.lastFrameMs) / 1000) : 0;
     this.lastFrameMs = now;
 
     const nowMs = Date.now();
@@ -240,26 +308,10 @@ export class TrainLayer {
       const heat = emptyFC();
       this.live.clear();
       for (const [id, l] of this.legs) {
-        const s = this.sample(l, nowSec);
-
-        // Ease from the pre-update position to the freshly computed one so the
-        // periodic feed refresh doesn't cause a visible jump. Once the
-        // transition completes, render the true interpolated position directly.
-        let lng = s.lng;
-        let lat = s.lat;
-        if (l.transStartMs != null && l.prevLng != null && l.prevLat != null) {
-          const p = (nowMs - l.transStartMs) / TRANSITION_MS;
-          if (p < 1) {
-            const e = p * (2 - p); // ease-out quad
-            lng = l.prevLng + (s.lng - l.prevLng) * e;
-            lat = l.prevLat + (s.lat - l.prevLat) * e;
-          } else {
-            // Transition done — clear so we stop blending.
-            l.transStartMs = undefined;
-            l.prevLng = undefined;
-            l.prevLat = undefined;
-          }
-        }
+        const cp = this.paths.get(id) ?? { cum: l.cum, len: l.len };
+        const s = this.sample(l, cp, nowSec, dtSec);
+        const lng = s.lng;
+        const lat = s.lat;
 
         fc.features.push({
           type: "Feature",
@@ -296,6 +348,7 @@ export class TrainLayer {
           label: l.label,
           boro: l.boro,
           asOf: l.hts,
+          v: l.v,
         });
 
         // Feed the hotspots heatmap: any train significantly off schedule, or

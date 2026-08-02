@@ -5,8 +5,11 @@ import GtfsRealtimeBindings from "gtfs-realtime-bindings";
 import type { ServiceAlert, RouteStatus } from "@transitplotter/shared";
 import type { StaticData } from "./static/load.js";
 import { ALERTS_URL } from "./feeds.js";
+import { health } from "./health.js";
 
 const { transit_realtime } = GtfsRealtimeBindings;
+
+health.register("alerts", "Service Alerts", "Alerts", ALERTS_URL);
 
 const baseStop = (id: string) => (id.endsWith("N") || id.endsWith("S") ? id.slice(0, -1) : id);
 
@@ -42,14 +45,17 @@ const text = (t: any): string => t?.translation?.[0]?.text ?? "";
 
 /** Fetch and parse the subway service alerts. */
 export async function fetchAlerts(): Promise<ServiceAlert[]> {
+  health.pollStart("alerts");
   const res = await fetch(ALERTS_URL);
   if (!res.ok) {
     console.warn(`alerts feed -> ${res.status}`);
+    health.fail("alerts", `HTTP ${res.status}`);
     return [];
   }
   const buf = new Uint8Array(await res.arrayBuffer());
   const msg = transit_realtime.FeedMessage.decode(buf);
   const nowSec = Math.floor(Date.now() / 1000);
+  const headerTs = Number(msg.header?.timestamp ?? nowSec);
 
   const out: ServiceAlert[] = [];
   for (const entity of msg.entity) {
@@ -89,6 +95,11 @@ export async function fetchAlerts(): Promise<ServiceAlert[]> {
       effect: label,
     });
   }
+  health.ok("alerts", {
+    count: out.length,
+    dataTs: headerTs * 1000,
+    info: `${msg.entity.length} raw, ${out.length} active subway`,
+  });
   return out;
 }
 

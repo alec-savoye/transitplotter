@@ -347,11 +347,18 @@ web/src/
 | Env var            | Default                          | Purpose                          |
 | ------------------ | -------------------------------- | -------------------------------- |
 | `PORT`             | `8080`                           | server listen port (container)   |
-| `GTFS_CACHE_DIR`   | `<repo>/.cache`                  | where the static SQLite lives    |
+| `GTFS_CACHE_HOST`  | `./.cache`                       | host dir for persistent data (SQLite, JSON stores, node_modules); set to an absolute path outside the repo to keep it off your boot drive |
+| `GTFS_CACHE_DIR`   | `/cache`                         | in-container mount of the data dir |
 | `GTFS_STATIC_URL`  | MTA supplemented ZIP             | static GTFS source               |
 | `FERRY_STATIC_URL` | Connexionz NYC Ferry ZIP         | ferry static GTFS source         |
 | `BUS_API_KEY`      | *(unset)*                        | MTA Bus Time key; buses disabled when unset |
 | `GEOCODER_URL`     | `https://nominatim.openstreetmap.org` | geocoder for the trip planner (set to a self-hosted Nominatim to avoid public rate limits) |
+| `ADMIN_PASSWORD`   | `CONFIG`                         | gates the hidden admin overlay; **change this if you expose the server** |
 
-Provide `BUS_API_KEY` via a local `.env` file (gitignored) or the environment;
-`docker-compose.yml` passes it through to the server.
+Copy `.env.example` to `.env` (gitignored) and set your values; `docker-compose.yml`
+passes them through to the server. `BUS_API_KEY` is optional — without it the
+subway and ferry layers still work, only buses are disabled.
+
+> **Security note:** the admin overlay password is compared in plaintext and is
+> **not** meant to protect anything sensitive. Don't expose this server to the
+> public internet without your own auth/rate-limiting in front of it.

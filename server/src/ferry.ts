@@ -7,12 +7,15 @@ import GtfsRealtimeBindings from "gtfs-realtime-bindings";
 import type { StaticData, Shape } from "./static/load.js";
 import type { ActiveLeg } from "./state.js";
 import { projectDistance } from "./static/geometry.js";
+import { health } from "./health.js";
 
 const { transit_realtime } = GtfsRealtimeBindings;
 
 const FERRY_BASE = "http://nycferry.connexionz.net/rtt/public/utility/gtfsrealtime.aspx";
 export const FERRY_VEHICLES_URL = `${FERRY_BASE}/vehicleposition`;
 export const FERRY_TRIPUPDATES_URL = `${FERRY_BASE}/tripupdate`;
+
+health.register("ferry", "NYC Ferry (GPS)", "Ferry", FERRY_VEHICLES_URL);
 
 /** Namespaced id helper — ferry ids share the "F:" prefix used at load time. */
 const F = (id: string) => `F:${id}`;
@@ -39,11 +42,15 @@ async function decode(url: string) {
  * that the existing legwire/interpolation path understands.
  */
 export async function fetchFerryLegs(stat: StaticData): Promise<ActiveLeg[]> {
+  health.pollStart("ferry");
   const [vp, tu] = await Promise.all([
     decode(FERRY_VEHICLES_URL),
     decode(FERRY_TRIPUPDATES_URL),
   ]);
-  if (!vp) return [];
+  if (!vp) {
+    health.fail("ferry", "vehicle feed unavailable");
+    return [];
+  }
 
   // Index trip updates by namespaced trip id.
   const preds = new Map<string, FerryPrediction>();
@@ -153,5 +160,11 @@ export async function fetchFerryLegs(stat: StaticData): Promise<ActiveLeg[]> {
     });
   }
 
+  const headerTs = Number(vp.header?.timestamp ?? Math.floor(Date.now() / 1000));
+  health.ok("ferry", {
+    count: legs.length,
+    dataTs: headerTs * 1000,
+    info: `${vp.entity.length} vehicles`,
+  });
   return legs;
 }

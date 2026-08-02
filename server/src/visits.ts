@@ -1,6 +1,6 @@
 // Visitor analytics: total visits, per-day counts, and unique visitor IPs with
-// a coarse geo lookup. Ported from the asphoto admin analytics. Persisted as a
-// lightweight JSON in the off-boot cache dir (same convention as track records).
+// a coarse geo lookup. Persisted as a lightweight JSON in the cache dir (same
+// convention as track records).
 //
 // Privacy/robustness notes:
 //   - Private/LAN IPs are ignored (they're just us / the reverse proxy).

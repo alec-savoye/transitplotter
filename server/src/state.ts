@@ -10,6 +10,8 @@
 
 import type { FeedTrip } from "./parse.js";
 import type { StaticData, Shape } from "./static/load.js";
+import type { RoutingGraph } from "./routing/graph.js";
+import { typicalSeconds } from "./routing/graph.js";
 
 export interface ActiveLeg {
   tripId: string;
@@ -68,7 +70,14 @@ function baseRoute(routeId: string): string {
   return ROUTE_ALIAS[noX] ?? noX;
 }
 
-export function buildActiveLegs(feed: FeedTrip[], stat: StaticData): ActiveLeg[] {
+const baseStop = (id: string) =>
+  id.endsWith("N") || id.endsWith("S") ? id.slice(0, -1) : id;
+
+export function buildActiveLegs(
+  feed: FeedTrip[],
+  stat: StaticData,
+  graph?: RoutingGraph
+): ActiveLeg[] {
   const nowSec = Math.floor(Date.now() / 1000);
   const legs: ActiveLeg[] = [];
 
@@ -90,6 +99,9 @@ export function buildActiveLegs(feed: FeedTrip[], stat: StaticData): ActiveLeg[]
     // preceding stop on the canonical line order.
     let fromStopId: string;
     let departTs: number;
+    // Arrival at the next stop is known from the feed; compute it first so the
+    // implicit-origin case can derive a *stable* departure from it.
+    const arriveTsRaw = to.arrival ?? to.departure ?? nowSec;
     if (nextIdx > 0) {
       const prev = su[nextIdx - 1];
       fromStopId = prev.stopId;
@@ -97,14 +109,21 @@ export function buildActiveLegs(feed: FeedTrip[], stat: StaticData): ActiveLeg[]
     } else if (line) {
       const oi = line.order.indexOf(to.stopId);
       fromStopId = oi > 0 ? line.order[oi - 1] : to.stopId;
-      // No timestamp for the implicit previous stop; assume it just departed.
-      departTs = nowSec;
+      // No timestamp for the implicit previous stop. Deriving departTs = nowSec
+      // every poll makes the train perpetually "just departed" and lurch on each
+      // refresh. Instead anchor the departure to the (stable) predicted arrival
+      // minus the typical segment time, so d0/d1 don't drift between polls.
+      const typical =
+        graph != null
+          ? typicalSeconds(graph, rid, baseStop(fromStopId), baseStop(to.stopId))
+          : null;
+      departTs = typical != null ? arriveTsRaw - typical : nowSec;
     } else {
       fromStopId = to.stopId;
       departTs = nowSec;
     }
 
-    const arriveTs = to.arrival ?? to.departure ?? departTs;
+    const arriveTs = Math.max(arriveTsRaw, departTs);
 
     const fromStop = stat.stops.get(fromStopId);
     const toStop = stat.stops.get(to.stopId);

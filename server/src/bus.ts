@@ -7,8 +7,16 @@ import GtfsRealtimeBindings from "gtfs-realtime-bindings";
 import type { StaticData } from "./static/load.js";
 import type { ActiveLeg } from "./state.js";
 import { BUS_API_KEY, BUS_VEHICLES_URL, BUS_TRIPUPDATES_URL } from "./feeds.js";
+import { health } from "./health.js";
 
 const { transit_realtime } = GtfsRealtimeBindings;
+
+health.register(
+  "bus",
+  "MTA Bus (OneBusAway, GPS)",
+  "Bus",
+  "https://gtfsrt.prod.obanyc.com/vehiclePositions",
+);
 
 /** Namespaced id helper — bus ids share the "B:" prefix used at load time. */
 const B = (id: string) => `B:${id}`;
@@ -40,13 +48,20 @@ async function decode(url: string) {
 }
 
 export async function fetchBusLegs(stat: StaticData): Promise<ActiveLeg[]> {
-  if (!BUS_API_KEY) return []; // no key configured -> buses disabled
+  if (!BUS_API_KEY) {
+    health.fail("bus", "BUS_API_KEY not configured");
+    return []; // no key configured -> buses disabled
+  }
 
+  health.pollStart("bus");
   const [vp, tu] = await Promise.all([
     decode(BUS_VEHICLES_URL),
     decode(BUS_TRIPUPDATES_URL),
   ]);
-  if (!vp) return [];
+  if (!vp) {
+    health.fail("bus", "vehicle feed unavailable");
+    return [];
+  }
 
   // Index trip updates: tripId -> first upcoming arrival (epoch s) + its stopId.
   const nextArr = new Map<string, { stopId: string; arr: number; delay: number | null }>();
@@ -119,5 +134,11 @@ export async function fetchBusLegs(stat: StaticData): Promise<ActiveLeg[]> {
     });
   }
 
+  const headerTs = Number(vp.header?.timestamp ?? Math.floor(Date.now() / 1000));
+  health.ok("bus", {
+    count: legs.length,
+    dataTs: headerTs * 1000,
+    info: `${vp.entity.length} vehicles`,
+  });
   return legs;
 }

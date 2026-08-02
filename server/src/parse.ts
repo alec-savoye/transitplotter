@@ -4,8 +4,14 @@
 
 import GtfsRealtimeBindings from "gtfs-realtime-bindings";
 import { FEED_URLS } from "./feeds.js";
+import { health } from "./health.js";
 
 const { transit_realtime } = GtfsRealtimeBindings;
+
+// Register each subway feed group so the admin panel lists them up-front.
+for (const [k, url] of Object.entries(FEED_URLS)) {
+  health.register(`subway:${k}`, `Subway ${k}`, "Subway", url);
+}
 
 export interface FeedTrip {
   tripId: string;
@@ -20,12 +26,14 @@ export interface FeedTrip {
   }[];
 }
 
-async function fetchFeed(url: string): Promise<FeedTrip[]> {
+async function fetchFeed(url: string, key: string): Promise<FeedTrip[]> {
+  health.pollStart(key);
   const res = await fetch(url, {
     headers: { Accept: "application/x-protobuf" },
   });
   if (!res.ok) {
     console.warn(`feed ${url} -> ${res.status}`);
+    health.fail(key, `HTTP ${res.status}`);
     return [];
   }
   const buf = new Uint8Array(await res.arrayBuffer());
@@ -49,17 +57,24 @@ async function fetchFeed(url: string): Promise<FeedTrip[]> {
 
     out.push({ tripId, routeId, headerTs, stopUpdates });
   }
+  health.ok(key, {
+    count: out.length,
+    dataTs: headerTs * 1000,
+    info: `${msg.entity.length} entities`,
+  });
   return out;
 }
 
 /** Fetch all feeds in parallel; tolerate individual feed failures. */
 export async function fetchAllFeeds(): Promise<FeedTrip[]> {
+  const entries = Object.entries(FEED_URLS);
   const results = await Promise.allSettled(
-    Object.values(FEED_URLS).map((u) => fetchFeed(u))
+    entries.map(([k, u]) => fetchFeed(u, `subway:${k}`))
   );
   const trips: FeedTrip[] = [];
-  for (const r of results) {
+  results.forEach((r, i) => {
     if (r.status === "fulfilled") trips.push(...r.value);
-  }
+    else health.fail(`subway:${entries[i][0]}`, r.reason);
+  });
   return trips;
 }

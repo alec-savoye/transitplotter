@@ -58,6 +58,12 @@ export interface ServerMessage {
   t: number;
   /** All active train legs. */
   legs: TrainLeg[];
+  /**
+   * Estimated number of cars currently on NYC roads (synthesized from live NYC
+   * DOT traffic speeds, calibrated to MTA congestion-zone counts). Absent if
+   * the traffic feed was unavailable this poll. Powers the HUD 🚗 line.
+   */
+  cars?: number;
 }
 
 /** Static route metadata sent once on connect so the client can draw legend/colors. */
@@ -237,4 +243,104 @@ export interface StationArrivals {
   south: Arrival[];
   /** Active service alerts touching this station or its routes. */
   alerts?: ServiceAlert[];
+}
+
+// ---------------------------------------------------------------------------
+// Interpolation-error metrics (GET /interp/stats)
+//
+// The subway feed has no coordinates, so we model position by moving vehicles
+// along track over predicted times. To know how good that model is, on each
+// feed refresh we compare where the *previous* leg predicted a vehicle would be
+// at the refresh instant against the new ground truth:
+//   - subway: the new leg's freshly computed position (the "snap" magnitude the
+//     user perceives as a jump) — a proxy for true error.
+//   - bus/ferry: the new leg's real GPS anchor — a true interpolation error.
+// Lower is better; watch it trend down as the model improves.
+// ---------------------------------------------------------------------------
+
+/** Aggregate error statistics for one bucket (overall, a mode, or a route). */
+export interface InterpErrorBucket {
+  /** Number of samples contributing to this bucket. */
+  n: number;
+  /** Mean along-track error in meters. */
+  mean: number;
+  /** Median (p50) error in meters. */
+  p50: number;
+  /** 95th-percentile error in meters. */
+  p95: number;
+}
+
+/** One calendar day of aggregate interpolation error. */
+export interface InterpErrorDay {
+  /** Calendar date "YYYY-MM-DD" (server local time). */
+  date: string;
+  /** Sample count that day. */
+  n: number;
+  /** Mean error (m) that day. */
+  mean: number;
+  /** p95 error (m) that day. */
+  p95: number;
+}
+
+/** Interpolation-error report returned by GET /interp/stats. */
+export interface InterpErrorStats {
+  /** Total samples logged since the store began. */
+  totalSamples: number;
+  /** Overall error across all samples. */
+  overall: InterpErrorBucket;
+  /** Error broken down by mode ("subway" | "bus" | "ferry"). */
+  byMode: Record<string, InterpErrorBucket>;
+  /** Error broken down by route id (top routes by sample count). */
+  byRoute: Record<string, InterpErrorBucket>;
+  /** Recent per-day trend, oldest first. */
+  days: InterpErrorDay[];
+  /**
+   * Whether the error is a true GPS-referenced measurement (bus/ferry) or the
+   * snap-magnitude proxy (subway). Reported per bucket via `byMode` labels.
+   */
+  note: string;
+}
+
+// ---------------------------------------------------------------------------
+// Vehicle-count time series (GET /counts)
+//
+// One sample is recorded per feed poll (~20s), holding the number of active
+// legs per mode at that instant, plus how many of those were delayed (predicted
+// delay ≥ 120s). The store prunes to a rolling 48-hour window. Powers the two
+// "over the last 48h" charts (double-click the HUD): active vehicles, and
+// delayed vehicles, each split by mode.
+// ---------------------------------------------------------------------------
+
+/** One sampled count of active (and delayed) vehicles by mode. */
+export interface VehicleCountPoint {
+  /** Sample time (epoch ms) — the poll instant. */
+  t: number;
+  /** Active subway trains. */
+  subway: number;
+  /** Active buses (enabled boroughs). */
+  bus: number;
+  /** Active ferries. */
+  ferry: number;
+  /** Delayed subway trains (predicted delay ≥ 120s). */
+  subwayDelayed: number;
+  /** Delayed buses (predicted delay ≥ 120s). */
+  busDelayed: number;
+  /** Delayed ferries (predicted delay ≥ 120s; ferries carry no delay signal, so 0). */
+  ferryDelayed: number;
+  /**
+   * Estimated cars on NYC roads at this instant (synthesized from live traffic
+   * speeds, CRZ-calibrated). 0 for points recorded before the traffic feed was
+   * available. Shown as an "estimated" series in the active-vehicles chart.
+   */
+  cars: number;
+}
+
+/** Rolling vehicle-count series returned by GET /counts (oldest → newest). */
+export interface VehicleCountSeries {
+  /** Retention window in ms (the intended X-axis span, e.g. 48h). */
+  windowMs: number;
+  /** Server clock (epoch ms) when this snapshot was built. */
+  now: number;
+  /** Samples within the window, oldest first. */
+  points: VehicleCountPoint[];
 }

@@ -12,6 +12,17 @@ const SATELLITE_TILES = [
   "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
 ];
 
+// Esri "World Transportation" reference overlay: transparent PNG tiles with
+// roads + street names. Free, no API key, same provider as the imagery. We only
+// switch it on at block-level zoom so it labels streets without cluttering the
+// city-wide view. (Street names are baked into the tiles, not vector text.)
+const STREET_LABEL_TILES = [
+  "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}",
+];
+
+/** Zoom at which street labels begin to fade in (~a few blocks in view). */
+const STREET_LABEL_MINZOOM = 14;
+
 export function createMap(container: string): maplibregl.Map {
   const map = new maplibregl.Map({
     container,
@@ -30,18 +41,46 @@ export function createMap(container: string): maplibregl.Map {
           attribution:
             "Imagery &copy; Esri, Maxar, Earthstar Geographics, and the GIS User Community",
         },
+        "street-labels": {
+          type: "raster",
+          tiles: STREET_LABEL_TILES,
+          tileSize: 256,
+          // These tiles only carry detail at street zoom levels.
+          minzoom: STREET_LABEL_MINZOOM,
+          maxzoom: 19,
+          attribution: "Roads &copy; Esri, HERE, Garmin",
+        },
       },
       layers: [
         // Fallback background while tiles load.
         { id: "bg", type: "background", paint: { "background-color": "#0a0f14" } },
         { id: "satellite", type: "raster", source: "satellite" },
+        // Street names / roads overlay, faded in only at block-level zoom so it
+        // labels streets when zoomed in without cluttering the city-wide view.
+        {
+          id: "street-labels",
+          type: "raster",
+          source: "street-labels",
+          minzoom: STREET_LABEL_MINZOOM,
+          paint: {
+            "raster-opacity": [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              STREET_LABEL_MINZOOM,
+              0,
+              STREET_LABEL_MINZOOM + 1,
+              0.9,
+            ],
+          },
+        },
       ],
       glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
     },
-    center: [-73.98, 40.75], // Midtown Manhattan
-    zoom: 11,
-    pitch: IS_MOBILE ? 0 : 45, // tilted 3D-style view (flat on mobile for perf)
-    bearing: IS_MOBILE ? 0 : -17,
+    center: [-73.98, 40.75], // Midtown Manhattan (overridden by fitToAllRoutes)
+    zoom: 10,
+    pitch: 0, // start top-down (flat); users can tilt via the compass/right-drag
+    bearing: 0, // north up
     maxPitch: 75,
   });
 
@@ -50,12 +89,13 @@ export function createMap(container: string): maplibregl.Map {
   return map;
 }
 
-/** Add sources/layers for routes, stations, and trains, loading static geo. */
+/** Add sources/layers for routes, stations, and trains, loading static geo.
+ *  Returns the loaded routes GeoJSON so callers can fit the initial view. */
 export async function addLayers(
   map: maplibregl.Map,
   serverHttp: string,
   routes: RouteMeta[]
-) {
+): Promise<GeoJSON.FeatureCollection> {
   const [routesGeo, stationsGeo] = await Promise.all([
     fetch(`${serverHttp}/geo/routes`).then((r) => r.json()).catch(() => emptyFC()),
     fetch(`${serverHttp}/geo/stations`).then((r) => r.json()).catch(() => emptyFC()),
@@ -339,6 +379,50 @@ export async function addLayers(
       "icon-size": ["interpolate", ["linear"], ["zoom"], 10, 0.6, 14, 1.0],
     },
   });
+
+  return routesGeo as GeoJSON.FeatureCollection;
+}
+
+/**
+ * Fit the initial view to all subway + ferry route lines (north-up, top-down),
+ * so the whole system is visible on load. Derived from the "routes" source
+ * bounds; falls back to a citywide box if the source has no features yet.
+ */
+export function fitToAllRoutes(map: maplibregl.Map, routesGeo: GeoJSON.FeatureCollection) {
+  let minLng = Infinity,
+    minLat = Infinity,
+    maxLng = -Infinity,
+    maxLat = -Infinity;
+  const visit = (coords: GeoJSON.Position[]) => {
+    for (const [lng, lat] of coords) {
+      if (lng < minLng) minLng = lng;
+      if (lat < minLat) minLat = lat;
+      if (lng > maxLng) maxLng = lng;
+      if (lat > maxLat) maxLat = lat;
+    }
+  };
+  for (const f of (routesGeo.features ?? []) as GeoJSON.Feature[]) {
+    const g = f.geometry;
+    if (!g) continue;
+    if (g.type === "LineString") visit(g.coordinates);
+    else if (g.type === "MultiLineString") g.coordinates.forEach(visit);
+  }
+  const bounds: [[number, number], [number, number]] =
+    minLng !== Infinity
+      ? [
+          [minLng, minLat],
+          [maxLng, maxLat],
+        ]
+      : [
+          [-74.27, 40.49], // NYC fallback box
+          [-73.68, 40.92],
+        ];
+  map.fitBounds(bounds, {
+    padding: IS_MOBILE ? 20 : 40,
+    bearing: 0, // north up
+    pitch: 0, // top-down
+    animate: false,
+  });
 }
 
 /** Default zoom at/above which buses become visible. */
@@ -382,6 +466,169 @@ export function setTrackRecordsVisible(map: maplibregl.Map, visible: boolean) {
   const v = visible ? "visible" : "none";
   if (map.getLayer("trackrecords-fill")) map.setLayoutProperty("trackrecords-fill", "visibility", v);
   if (map.getLayer("trackrecords-outline")) map.setLayoutProperty("trackrecords-outline", "visibility", v);
+}
+
+// --- Isolate mode ----------------------------------------------------------
+// Filters the route/station/vehicle layers down to a single subway or ferry
+// route so only that line (and its live vehicles) shows. Remembers the filters
+// that were in place so they can be restored on exit.
+
+type SavedFilter = ReturnType<maplibregl.Map["getFilter"]>;
+interface SavedFilters {
+  routes: SavedFilter;
+  routesFerry: SavedFilter;
+  routesDisrupted: SavedFilter;
+  stations: SavedFilter;
+  stationPins: SavedFilter;
+  trains: SavedFilter;
+  ferries: SavedFilter;
+}
+let savedFilters: SavedFilters | null = null;
+/** Route line-paint props overridden while isolating, restored on exit. */
+interface SavedPaint {
+  routesWidth: unknown;
+  routesOpacity: unknown;
+  routesBlur: unknown;
+  ferryWidth: unknown;
+  ferryOpacity: unknown;
+  ferryDash: unknown;
+}
+let savedPaint: SavedPaint | null = null;
+
+/**
+ * Isolate a single route id (subway or ferry) on the map: hide every other
+ * route line, its stations, and vehicles of other routes. `mode` selects which
+ * vehicle layer carries the line. Non-destructive — `clearIsolate()` restores.
+ */
+export function setIsolatedRoute(
+  map: maplibregl.Map,
+  routeId: string,
+  mode: "subway" | "ferry",
+) {
+  if (!savedFilters) {
+    savedFilters = {
+      routes: map.getFilter("routes"),
+      routesFerry: map.getFilter("routes-ferry"),
+      routesDisrupted: map.getFilter("routes-disrupted"),
+      stations: map.getFilter("stations"),
+      stationPins: map.getFilter("station-pins"),
+      trains: map.getFilter("trains"),
+      ferries: map.getFilter("ferries"),
+    };
+  }
+  if (!savedPaint) {
+    savedPaint = {
+      routesWidth: map.getPaintProperty("routes", "line-width"),
+      routesOpacity: map.getPaintProperty("routes", "line-opacity"),
+      routesBlur: map.getPaintProperty("routes", "line-blur"),
+      ferryWidth: map.getPaintProperty("routes-ferry", "line-width"),
+      ferryOpacity: map.getPaintProperty("routes-ferry", "line-opacity"),
+      ferryDash: map.getPaintProperty("routes-ferry", "line-dasharray"),
+    };
+  }
+
+  const onlyRoute = (prop: string) =>
+    ["==", ["get", prop], routeId] as unknown as maplibregl.FilterSpecification;
+  // A station's `routes` is a concatenated string of single-char line ids
+  // (e.g. "25" = routes 2 & 5, "ACE" = A, C, E). Substring-match the id. Strip
+  // any express suffix ("6X" -> "6") so express variants map to base stations.
+  const baseId = routeId.replace(/X$/, "");
+  const stationOnRoute = [
+    "in",
+    baseId,
+    ["coalesce", ["get", "routes"], ""],
+  ] as unknown as maplibregl.FilterSpecification;
+  const hideAll = ["==", ["get", "__none__"], "__none__x"] as unknown as maplibregl.FilterSpecification;
+
+  // Emphasize the isolated line: thicker, fully opaque, with a soft glow so it
+  // reads clearly against the satellite basemap.
+  const boldWidth = [
+    "interpolate",
+    ["linear"],
+    ["zoom"],
+    10, 4,
+    14, 8,
+  ] as unknown as maplibregl.ExpressionSpecification;
+
+  if (mode === "subway") {
+    if (map.getLayer("routes")) {
+      map.setFilter("routes", onlyRoute("route"));
+      map.setPaintProperty("routes", "line-width", boldWidth);
+      map.setPaintProperty("routes", "line-opacity", 1);
+      map.setPaintProperty("routes", "line-blur", 0.4);
+    }
+    if (map.getLayer("routes-ferry")) map.setFilter("routes-ferry", hideAll);
+    if (map.getLayer("trains")) map.setFilter("trains", onlyRoute("route"));
+    if (map.getLayer("ferries")) map.setFilter("ferries", hideAll);
+    if (map.getLayer("stations")) map.setFilter("stations", stationOnRoute);
+    if (map.getLayer("station-pins")) map.setFilter("station-pins", stationOnRoute);
+    // The disrupted dashed overlay draws from the same source; restrict it to
+    // the isolated route too, or other disrupted lines keep showing dashes.
+    if (map.getLayer("routes-disrupted")) map.setFilter("routes-disrupted", onlyRoute("route"));
+  } else {
+    // Ferry route lines share the "routes" source with a mode==ferry filter.
+    if (map.getLayer("routes")) map.setFilter("routes", hideAll);
+    if (map.getLayer("routes-ferry")) {
+      map.setFilter("routes-ferry", [
+        "all",
+        ["==", ["get", "mode"], "ferry"],
+        ["==", ["get", "route"], routeId],
+      ] as unknown as maplibregl.FilterSpecification);
+      map.setLayoutProperty("routes-ferry", "visibility", "visible");
+      // Solid + thick so the isolated ferry route stands out (drop the dashes).
+      map.setPaintProperty("routes-ferry", "line-width", boldWidth);
+      map.setPaintProperty("routes-ferry", "line-opacity", 1);
+      map.setPaintProperty("routes-ferry", "line-dasharray", [1, 0]);
+    }
+    if (map.getLayer("trains")) map.setFilter("trains", hideAll);
+    if (map.getLayer("ferries")) {
+      map.setFilter("ferries", onlyRoute("route"));
+      map.setLayoutProperty("ferries", "visibility", "visible");
+    }
+    // Ferry terminals carry no per-route list; hide subway pins/dots entirely.
+    if (map.getLayer("stations")) map.setFilter("stations", ["==", ["get", "mode"], "ferry"] as unknown as maplibregl.FilterSpecification);
+    if (map.getLayer("station-pins")) map.setFilter("station-pins", ["==", ["get", "mode"], "ferry"] as unknown as maplibregl.FilterSpecification);
+    // No subway disruption dashes while isolating a ferry route.
+    if (map.getLayer("routes-disrupted")) map.setFilter("routes-disrupted", hideAll);
+  }
+
+  // Buses + bus stops always hidden in isolate (too noisy).
+  if (map.getLayer("buses")) map.setLayoutProperty("buses", "visibility", "none");
+  if (map.getLayer("bus-stops")) map.setLayoutProperty("bus-stops", "visibility", "none");
+}
+
+/** Exit isolate mode: restore the filters captured on entry. */
+export function clearIsolate(map: maplibregl.Map) {
+  if (!savedFilters) return;
+  const s = savedFilters;
+  const restore = (id: string, f: SavedFilter) => {
+    if (map.getLayer(id)) map.setFilter(id, f ?? undefined);
+  };
+  restore("routes", s.routes);
+  restore("routes-ferry", s.routesFerry);
+  restore("routes-disrupted", s.routesDisrupted);
+  restore("stations", s.stations);
+  restore("station-pins", s.stationPins);
+  restore("trains", s.trains);
+  restore("ferries", s.ferries);
+  if (map.getLayer("buses")) map.setLayoutProperty("buses", "visibility", "visible");
+  if (map.getLayer("bus-stops")) map.setLayoutProperty("bus-stops", "visibility", "visible");
+  // Restore the route line paint we bolded on entry.
+  if (savedPaint) {
+    const p = savedPaint;
+    if (map.getLayer("routes")) {
+      map.setPaintProperty("routes", "line-width", p.routesWidth ?? undefined);
+      map.setPaintProperty("routes", "line-opacity", p.routesOpacity ?? undefined);
+      map.setPaintProperty("routes", "line-blur", p.routesBlur ?? undefined);
+    }
+    if (map.getLayer("routes-ferry")) {
+      map.setPaintProperty("routes-ferry", "line-width", p.ferryWidth ?? undefined);
+      map.setPaintProperty("routes-ferry", "line-opacity", p.ferryOpacity ?? undefined);
+      map.setPaintProperty("routes-ferry", "line-dasharray", p.ferryDash ?? undefined);
+    }
+    savedPaint = null;
+  }
+  savedFilters = null;
 }
 
 /**

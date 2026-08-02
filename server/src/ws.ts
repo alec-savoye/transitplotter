@@ -13,7 +13,10 @@ import type { RoutingGraph } from "./routing/graph.js";
 import { planJourney } from "./routing/plan.js";
 import { geocode } from "./routing/geocode.js";
 import type { TrackRecordStore } from "./trackrecord.js";
+import type { InterpErrorStore } from "./interp.js";
 import { VisitStore, clientIp } from "./visits.js";
+import type { CountStore } from "./counts.js";
+import { health } from "./health.js";
 
 /** Admin-page password. Override via ADMIN_PASSWORD env; defaults to "CONFIG". */
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "CONFIG";
@@ -32,7 +35,9 @@ export class Broadcaster {
     private feedStore: FeedStore,
     private graph: RoutingGraph,
     private trackRecords: TrackRecordStore,
-    private visits: VisitStore
+    private visits: VisitStore,
+    private interpErrors: InterpErrorStore,
+    private counts: CountStore
   ) {
     this.routesGeoJson = JSON.stringify(buildRoutesGeoJson(stat));
     this.stationsGeoJson = JSON.stringify(buildStationsGeoJson(stat));
@@ -100,6 +105,18 @@ export class Broadcaster {
       res.end(JSON.stringify(this.visits.stats()));
       return;
     }
+    // Admin: external data-source health (endpoint status). Requires the key.
+    if (req.url && req.url.startsWith("/admin/health")) {
+      if (!this.adminAuthed(req)) {
+        res.statusCode = 401;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(health.snapshot()));
+      return;
+    }
     // Track records: persisted on-time/late history bucketed into a spatial mesh.
     if (req.url === "/trackrecords") {
       res.setHeader("Content-Type", "application/json");
@@ -123,6 +140,18 @@ export class Broadcaster {
         return;
       }
       res.end(JSON.stringify(hist));
+      return;
+    }
+    // Interpolation-error metrics: how well the motion model predicts position.
+    if (req.url === "/interp/stats") {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(this.interpErrors.stats()));
+      return;
+    }
+    // Rolling 48h vehicle-count series (subway/bus/ferry) for the HUD chart.
+    if (req.url === "/counts") {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(this.counts.series()));
       return;
     }
     // All active subway alerts.
@@ -165,7 +194,7 @@ export class Broadcaster {
       res.end(
         "TransitPlotter backend (API only).\n" +
           "The map UI is served separately on port 5173.\n\n" +
-          "Endpoints: /health /routes /geo/routes /geo/stations /trackrecords /visit /alerts /status\n" +
+          "Endpoints: /health /routes /geo/routes /geo/stations /trackrecords /counts /visit /alerts /status\n" +
           "           /station/<id>/arrivals  /plan?from=..&to=..  (+ WebSocket)\n"
       );
       return;
