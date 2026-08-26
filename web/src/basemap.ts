@@ -271,7 +271,7 @@ export async function addLayers(
     source: "trackrecords",
     layout: { visibility: "none" },
     paint: {
-      // Cells without a full week of data are light gray; ready cells are
+      // Cells without a full collection window of data are light gray; ready cells are
       // colored green (reliable) -> yellow -> red (often late) by late rate.
       "fill-color": [
         "case",

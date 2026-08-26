@@ -85,11 +85,15 @@ export function startLoops(
       let subwayDelayed = 0,
         busDelayed = 0,
         ferryDelayed = 0;
+      const busDelayedBoro: Record<string, number> = {};
       for (const l of legs) {
         if ((l.dly ?? 0) < LATE_THRESHOLD_S) continue;
         const mode = l.mode ?? "subway";
-        if (mode === "bus") busDelayed++;
-        else if (mode === "ferry") ferryDelayed++;
+        if (mode === "bus") {
+          busDelayed++;
+          const boro = l.boro || "unknown";
+          busDelayedBoro[boro] = (busDelayedBoro[boro] ?? 0) + 1;
+        } else if (mode === "ferry") ferryDelayed++;
         else subwayDelayed++;
       }
       counts.record({
@@ -98,6 +102,7 @@ export function startLoops(
         ferry: ferry.length,
         subwayDelayed,
         busDelayed,
+        busDelayedBoro,
         ferryDelayed,
         cars: cars ?? 0,
       });

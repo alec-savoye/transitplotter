@@ -218,8 +218,17 @@ as "small / medium / large."
 - **`trackrecord.ts`** — `TrackRecordStore`. Reliability history bucketed into a
   ~445m spatial mesh (`LAT_STEP`/`LON_STEP`). Records one observation per
   completed segment traversal per trip (subway + bus; ferries excluded). Cells
-  become "ready" (colored on the map) only after a **7-day observation span**
-  (`WINDOW_DAYS`). Persists a compact JSON tally with per-day series.
+  become "ready" (colored on the map) after a **1-day observation span**
+  (`WINDOW_DAYS`) and enough decayed weight (`MIN_READY_WEIGHT`). **Storage is
+  bounded — it does NOT grow with the number of observations:** each cell keeps
+  a *time-decayed* late/total tally per mode (an exponential moving average with
+  `DECAY_HALFLIFE_MS`, default 1 day). On each new observation the existing
+  counts are first multiplied by `0.5^(dt/halflife)` then the new sample (weight
+  1) is added, so old data fades and the numbers converge instead of summing
+  forever. The percentage therefore tracks *recent* reliability and keeps
+  updating over time. A short per-cell daily series (pruned to
+  `MAX_HISTORY_DAYS`) still backs the click-through trend plot. Persists a
+  compact JSON tally keyed by cell — O(cells), not O(observations).
 - **`visits.ts`** — `VisitStore`. Visitor analytics: total, per-day, unique
   public IPs geolocated once via ip-api.com. `isPrivateIp()` filters LAN;
   `clientIp()` honors `X-Forwarded-For` (assumes a trusted reverse proxy).
@@ -448,9 +457,15 @@ flowchart LR
 - **Track records** (`/trackrecords`, `/trackrecords/history`):
   - `TrackRecordModeTally` `{ late, total }` — per mode, per cell.
   - `TrackRecordCell` `{ key, lat, lon, rate, total, ready, firstObs, lastObs,
-    subway, bus }` — one spatial mesh cell. `rate` is the **blended** late/total
-    across tracked modes; `ready` gates coloring on the 7-day span. **Ferries
-    have no tally** (no delay signal).
+    subway, bus }` — one spatial mesh cell. `rate` is the **average of the
+    per-mode late percentages** (subway and bus weighted equally, only modes
+    with observations contributing) — NOT a raw pooled `late/total`. Because
+    buses are ~87% of observations, pooling let bus volume swamp the subway
+    signal in a mixed cell; averaging the rates fixes that (see `modeRate()` in
+    `trackrecord.ts`). The tile color is derived from `rate`. `ready` gates
+    coloring on the 1-day span + a minimum decayed weight. `subway`/`bus`
+    tallies are **rounded time-decayed weights**, not lifetime integer counts.
+    **Ferries have no tally** (no delay signal).
   - `TrackRecordSnapshot` `{ totalObs, windowDays, readyCells, ready, cellStep,
     cells[] }` — the whole overlay. `cellStep` = `[latStep, lonStep]` for drawing.
   - `TrackRecordDay` `{ date, late, total }` and `TrackRecordHistory`
@@ -614,7 +629,10 @@ to find exact lines; they move.
 | --- | --- | --- |
 | `LAT_STEP` / `LON_STEP` | `0.004` / `0.005` | Mesh cell size (~445m). Smaller = finer map, more cells, slower to reach "ready", bigger JSON. |
 | `LATE_THRESHOLD_S` | `120` | A traversal counts as "late" past this delay. |
-| `WINDOW_DAYS` | `7` | Observation span before a cell is colored. |
+| `WINDOW_DAYS` | `1` | Observation span before a cell is colored. |
+| `DECAY_HALFLIFE_MS` | `86_400_000` | Half-life of the per-mode decayed tally (1 day). Larger = smoother/slower to react, remembers longer; smaller = tracks recent conditions more tightly. This is what keeps storage bounded. |
+| `MIN_READY_WEIGHT` | `5` | Minimum decayed observation weight before a cell is graded (avoids coloring a cell off one or two samples). |
+| `MAX_HISTORY_DAYS` | `14` | Per-cell daily trend series is pruned to this many days. |
 | `TRIP_STALE_MS` | `600_000` | Forget a trip not seen for 10 min (prevents phantom traversals). |
 
 ### Trip planner
@@ -714,10 +732,13 @@ place to look.
   planner, not timetable-exact.
 
 ### "Track records never turn colored"
-By design, cells need a **7-day observation span** (`WINDOW_DAYS`). Until then
-they're gray and the modal explains the wait. Also, the cache dir must persist
-`track_records.json` across restarts — if the bind mount is wrong, the clock
-resets every deploy.
+By design, cells need a **1-day observation span** (`WINDOW_DAYS`) plus a minimum
+decayed weight (`MIN_READY_WEIGHT`). Until then they're gray and the modal
+explains the wait. Also, the cache dir must persist `track_records.json` across
+restarts — if the bind mount is wrong, the clock resets every deploy. Note the
+tallies are **time-decayed** (half-life `DECAY_HALFLIFE_MS`), so a cell that
+stops being observed will fade back below the ready threshold and go gray again;
+that's expected, not a bug.
 
 ### "Track records report 0% late everywhere" (fixed 2026-08)
 Every mesh tile graded as ~0% late (all green) even though trains and buses were
@@ -737,9 +758,9 @@ docker compose exec -T server node -e '...decode tripUpdates...; count t.delay v
 ```
 Diagnostic signs this recurs: `/counts` shows `busDelayed` stuck at 0 while
 `subwayDelayed` is non-zero, and a live WS frame has no bus leg with `dly` set.
-Note the historical `track_records.json` still contains the pre-fix on-time bus
-samples; the blend self-corrects as new (correct) observations accumulate, or
-delete the file to reset (costs the 7-day window).
+The poisoned `track_records.json` from before this fix was deleted and the clock
+restarted; with the time-decayed tally it would also have self-corrected within
+a few half-lives (`DECAY_HALFLIFE_MS`) even without deleting it.
 
 ### "Alerts severity looks wrong"
 Severity is guessed from **headline text** (`classify()` in `alerts.ts`) because
@@ -819,8 +840,11 @@ Ordered roughly by likelihood.
 - **Bus street geometry.** Buses hop in straight lines to the next stop (no
   street shapes are ingested). Ingesting bus shapes would make bus motion follow
   roads, at the cost of a much larger cache DB.
-- **Reliability mesh persistence is a single JSON file.** Fine now; if history
-  grows for years this should move to SQLite or be compacted/rotated.
+- **Reliability mesh persistence is a single JSON file.** Fine now, and its size
+  is **bounded**: the per-mode tallies are time-decayed (fixed weight per cell,
+  not a growing sum) and the daily trend series is pruned to `MAX_HISTORY_DAYS`,
+  so the file scales with the number of populated cells (~a few thousand), not
+  with runtime. If the cell count ever explodes this could still move to SQLite.
 - **Trip planner is typical-time, not timetable-exact**, and ignores realtime
   delays. A realtime-aware planner would be a real feature jump.
 - **Accessibility / keyboard nav** of the map UI is minimal.
@@ -904,7 +928,9 @@ repo to keep data off your boot drive).
 
 The data directory contains:
 - `gtfs_static.sqlite` — static GTFS (rebuild to refresh).
-- `track_records.json` — reliability history (deleting it resets the 7-day clock).
+- `track_records.json` — reliability history (deleting it resets the 1-day
+  readiness clock). Bounded size: time-decayed per-cell tallies + pruned daily
+  series, so it scales with populated cells, not runtime.
 - `visits.json` — visitor analytics.
 - `interp_errors.json` — interpolation-error metrics (§6.5; delete to reset the
   baseline before/after a model change).
@@ -931,7 +957,7 @@ The data directory contains:
 - Planner failing → check `GEOCODER_URL` / Nominatim rate limits.
 - Mobile struggling → **View → Mobile** toggle, or lower `TARGET_FPS`.
 - Track records stuck gray → confirm the cache bind mount persists across
-  restarts and that ≥ 7 days have elapsed.
+  restarts and that ≥ 1 day has elapsed with enough observations per cell.
 
 ---
 

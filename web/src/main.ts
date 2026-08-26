@@ -233,10 +233,11 @@ export function carsShown(): boolean {
 
 /**
  * Wires the Track Records toggle. A cell is only colored once it has been
- * observed across at least one full calendar week; cells with less history show
- * light gray. Until *no* cell yet has a week of data (snapshot.ready === false),
- * clicking opens a "Collecting data" modal explaining the wait. Returns a getter
- * for whether the overlay is currently displayed (used to gate cell-click popups).
+ * observed across at least the collection window (see snapshot.windowDays);
+ * cells with less history show light gray. Until *no* cell yet has enough data
+ * (snapshot.ready === false), clicking opens a "Collecting data" modal
+ * explaining the wait. Returns a getter for whether the overlay is currently
+ * displayed (used to gate cell-click popups).
  */
 function setupTrackRecordsToggle(
   map: maplibregl.Map,
@@ -256,18 +257,24 @@ function setupTrackRecordsToggle(
   const showCollecting = () => {
     if (!modal) return;
     const snap = trackRecords.snapshot();
-    const windowDays = snap?.windowDays ?? 7;
+    const windowDays = snap?.windowDays ?? 1;
     const cells = snap?.cells ?? [];
 
     // Longest observation span across all cells = how close any cell is to a
-    // full week of history.
+    // full collection window of history.
     const now = Date.now();
     let bestDays = 0;
-    let late = 0;
+    let subwayLate = 0;
+    let subwayObs = 0;
+    let busLate = 0;
+    let busObs = 0;
     let obs = 0;
     for (const c of cells) {
       if (c.firstObs) bestDays = Math.max(bestDays, (now - c.firstObs) / 86_400_000);
-      late += c.subway.late + c.bus.late;
+      subwayLate += c.subway.late;
+      subwayObs += c.subway.total;
+      busLate += c.bus.late;
+      busObs += c.bus.total;
       obs += c.total;
     }
     const frac = Math.min(1, windowDays > 0 ? bestDays / windowDays : 0);
@@ -281,10 +288,13 @@ function setupTrackRecordsToggle(
         Longest history so far: <b>${bestDays.toFixed(1)}</b> of ${windowDays} days.`;
     if (bar) bar.style.width = `${Math.round(frac * 100)}%`;
     if (brk) {
+      const rowPct = (late: number, total: number) =>
+        total ? `${Math.round((late / total) * 100)}% late` : "no data yet";
       brk.innerHTML = obs
-        ? `Across <b>${cells.length}</b> area${cells.length === 1 ? "" : "s"} so far,
-           <b>${late}</b> of ${obs} observed segment traversals ran late. Cells still
-           collecting data appear light gray on the map.`
+        ? `Across <b>${cells.length}</b> area${cells.length === 1 ? "" : "s"} so far:
+           🚇 subway <b>${rowPct(subwayLate, subwayObs)}</b> (${subwayObs} obs),
+           🚌 bus <b>${rowPct(busLate, busObs)}</b> (${busObs} obs).
+           Cells still collecting data appear light gray on the map.`
         : `No observations yet — data accrues as vehicles complete trips.`;
     }
     modal.classList.add("show");

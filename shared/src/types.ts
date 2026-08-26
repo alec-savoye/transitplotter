@@ -160,9 +160,13 @@ export interface Itinerary {
 
 /** Per-mode late/total tally for a single mesh cell. */
 export interface TrackRecordModeTally {
-  /** Observations that were late (>= the server's late threshold). */
+  /**
+   * Late "weight" (time-decayed observation count). The server keeps a decaying
+   * exponential average rather than a lifetime sum, so this is a rounded
+   * weighted count of recent late traversals, not an all-time integer.
+   */
   late: number;
-  /** Total completed-segment observations recorded in this cell for this mode. */
+  /** Total (time-decayed) observation weight recorded in this cell for this mode. */
   total: number;
 }
 
@@ -174,14 +178,23 @@ export interface TrackRecordCell {
   lat: number;
   /** Cell center longitude (degrees). */
   lon: number;
-  /** Combined late rate across tracked modes (late / total), 0..1. */
+  /**
+   * Blended late rate for the cell, 0..1. This is the **average of the
+   * per-mode late percentages** (subway and bus weighted equally), NOT a raw
+   * `(subwayLate + busLate) / (subwayTotal + busTotal)`. Buses are ~87% of all
+   * observations, so pooling raw counts let bus volume dominate a mixed cell;
+   * averaging the rates keeps subway and bus reliability on equal footing.
+   * Only modes with observations contribute, so single-mode cells are just that
+   * mode's rate. This is the value the tile color is derived from.
+   */
   rate: number;
   /** Total observations across all modes in this cell. */
   total: number;
   /**
    * Whether this cell has enough history to be colored: it has been observed
-   * across a span of at least one calendar week. Cells that are not ready are
-   * rendered light gray ("not enough data yet").
+   * across a span of at least the collection window (see `windowDays`) and
+   * still carries enough recent (time-decayed) weight. Cells that are not ready
+   * are rendered light gray ("not enough data yet").
    */
   ready: boolean;
   /** Epoch ms of the first observation recorded in this cell (0 if none). */
@@ -323,8 +336,14 @@ export interface VehicleCountPoint {
   ferry: number;
   /** Delayed subway trains (predicted delay ≥ 120s). */
   subwayDelayed: number;
-  /** Delayed buses (predicted delay ≥ 120s). */
+  /** Delayed buses (predicted delay ≥ 120s), across all boroughs. */
   busDelayed: number;
+  /**
+   * Delayed buses broken down by borough code (manhattan | brooklyn | bronx |
+   * queens | statenisland). Sums to `busDelayed`. Absent (or partial) on points
+   * persisted before the breakdown existed — treat missing boroughs as 0.
+   */
+  busDelayedBoro?: Partial<Record<string, number>>;
   /** Delayed ferries (predicted delay ≥ 120s; ferries carry no delay signal, so 0). */
   ferryDelayed: number;
   /**

@@ -30,7 +30,7 @@ export class TrackRecords {
     this.timer = null;
   }
 
-  /** Whether at least one cell has a full week of data (any color to show). */
+  /** Whether at least one cell has a full collection window of data (any color to show). */
   isReady(): boolean {
     return this.latest?.ready ?? false;
   }

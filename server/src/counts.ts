@@ -78,6 +78,11 @@ export class CountStore {
           ferry: p.ferry,
           subwayDelayed: Number.isFinite(p.subwayDelayed) ? p.subwayDelayed : 0,
           busDelayed: Number.isFinite(p.busDelayed) ? p.busDelayed : 0,
+          // Preserve the per-borough breakdown when present (absent on older points).
+          busDelayedBoro:
+            p.busDelayedBoro && typeof p.busDelayedBoro === "object"
+              ? p.busDelayedBoro
+              : undefined,
           ferryDelayed: Number.isFinite(p.ferryDelayed) ? p.ferryDelayed : 0,
           cars: Number.isFinite(p.cars) ? p.cars : 0,
         }))

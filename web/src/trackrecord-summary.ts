@@ -26,8 +26,8 @@ function modeRow(label: string, late: number, total: number): string {
   const onTime = total - late;
   return `<div class="tr-row">
       <span class="tr-mode">${label}</span>
-      <span class="tr-nums"><b>${late}</b> late · ${onTime} on time
-        <span class="tr-sub">(${pct(late / total)} of ${total})</span></span>
+      <span class="tr-nums"><b>${pct(late / total)}</b> late
+        <span class="tr-sub">(${late} of ${total}; ${onTime} on time)</span></span>
     </div>`;
 }
 
@@ -42,11 +42,11 @@ function summaryHtml(c: TrackRecordCell): string {
     modeRow("🚇 Subway", c.subway.late, c.subway.total) +
     modeRow("🚌 Bus", c.bus.late, c.bus.total);
 
-  // Not enough history yet: this cell is gray. Explain the week requirement.
+  // Not enough history yet: this cell is gray. Explain the window requirement.
   if (!c.ready) {
     const days = daysSince(c.firstObs);
     const daysTxt = c.firstObs
-      ? `Observed for <b>${days.toFixed(1)}</b> of 7 day${days >= 1 && days < 2 ? "" : "s"} so far.`
+      ? `Observed for <b>${days.toFixed(1)}</b> of 1 day so far.`
       : `No observations recorded here yet.`;
     return `
       <div class="tr-head" style="border-color:#b8bcc2">
@@ -54,7 +54,7 @@ function summaryHtml(c: TrackRecordCell): string {
         Not enough data yet
       </div>
       <div class="tr-stats">
-        A cell must be observed across at least one full week before it is graded.<br>
+        A cell must be observed across at least one full day before it is graded.<br>
         ${daysTxt}
       </div>
       <div class="tr-rows">${modes}</div>
@@ -63,15 +63,22 @@ function summaryHtml(c: TrackRecordCell): string {
   }
 
   const g = grade(c.rate);
+  // The tile color reflects the *average of the per-mode late rates* (subway
+  // and bus weighted equally), not a raw pooled count — so the per-mode rows
+  // below explain the blend rather than summing to it.
+  const bothModes = c.subway.total > 0 && c.bus.total > 0;
   return `
     <div class="tr-head" style="border-color:${g.color}">
       <span class="tr-dot" style="background:${g.color}"></span>
       ${g.label}
     </div>
     <div class="tr-stats">
-      <b>${pct(c.rate)}</b> of ${c.total} observed segment${c.total === 1 ? "" : "s"}
-      here ran late
-      <span class="tr-sub">(over ${daysSince(c.firstObs).toFixed(0)}+ days)</span>
+      <b>${pct(c.rate)}</b> late
+      <span class="tr-sub">${
+        bothModes
+          ? "(subway &amp; bus rates averaged)"
+          : `(over ${c.total} observed segment${c.total === 1 ? "" : "s"})`
+      }</span>
     </div>
     <div class="tr-plot"><div class="tr-plot-loading">Loading history…</div></div>
     <div class="tr-rows">${modes}</div>

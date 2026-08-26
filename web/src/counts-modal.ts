@@ -43,11 +43,35 @@ const ACTIVE_MODES: LegendMode[] = [
   { key: "cars", label: "🚗 Cars (est.)", cls: "cars", value: (p) => p.cars, rightAxis: true },
 ];
 
-/** Modes drawn in the DELAY chart (transit only — cars have no delay signal). */
+/** Borough breakdown for delayed buses. Each borough is its own line, plotted
+ *  on the right-hand Y axis (delayed buses run ~1–2 orders of magnitude higher
+ *  than delayed subway/ferry, so sharing the left axis would flatten them). */
+const BUS_BOROUGHS: { code: string; label: string; cls: string }[] = [
+  { code: "manhattan", label: "🚌 Bus · Manhattan", cls: "bus-manhattan" },
+  { code: "brooklyn", label: "🚌 Bus · Brooklyn", cls: "bus-brooklyn" },
+  { code: "bronx", label: "🚌 Bus · Bronx", cls: "bus-bronx" },
+  { code: "queens", label: "🚌 Bus · Queens", cls: "bus-queens" },
+  { code: "statenisland", label: "🚌 Bus · Staten Is.", cls: "bus-statenisland" },
+];
+
+/** Delayed buses in one borough at a sample (0 when the breakdown is absent). */
+function busBoroDelayed(p: VehicleCountPoint, code: string): number {
+  return p.busDelayedBoro?.[code] ?? 0;
+}
+
+/** Modes drawn in the DELAY chart (transit only — cars have no delay signal).
+ *  Subway + ferry share the left axis; delayed buses are split by borough on
+ *  the right-hand axis so all delay signals can be observed together. */
 const DELAY_MODES: LegendMode[] = [
   { key: "subway", label: "🚇 Subway", cls: "subway", value: (p) => p.subwayDelayed },
-  { key: "bus", label: "🚌 Bus", cls: "bus", value: (p) => p.busDelayed },
   { key: "ferry", label: "⛴ Ferry", cls: "ferry", value: (p) => p.ferryDelayed },
+  ...BUS_BOROUGHS.map((b) => ({
+    key: "bus" as ModeKey,
+    label: b.label,
+    cls: b.cls,
+    value: (p: VehicleCountPoint) => busBoroDelayed(p, b.code),
+    rightAxis: true,
+  })),
 ];
 
 /** Wire the HUD double-click/tap trigger and the modal open/close behavior. */
@@ -126,6 +150,7 @@ export function setupCountsModal(serverHttp: string) {
 const delaySeries: ChartSeries[] = DELAY_MODES.map((m) => ({
   cls: m.cls,
   value: m.value,
+  rightAxis: m.rightAxis,
 }));
 
 /** Legend with the latest value for each mode (uses the same accessors). */
@@ -141,13 +166,29 @@ function legendHtml(data: VehicleCountSeries, modes: LegendMode[]): string {
 }
 
 function swatchColor(cls: string): string {
-  return cls === "subway"
-    ? "#fbbf24"
-    : cls === "bus"
-      ? "#4ade80"
-      : cls === "ferry"
-        ? "#38bdf8"
-        : "#f472b6"; // cars
+  switch (cls) {
+    case "subway":
+      return "#fbbf24";
+    case "bus":
+      return "#4ade80";
+    case "ferry":
+      return "#38bdf8";
+    case "cars":
+      return "#f472b6";
+    // Delayed-bus borough lines (each a distinct green→teal shade).
+    case "bus-manhattan":
+      return "#4ade80";
+    case "bus-brooklyn":
+      return "#a3e635";
+    case "bus-bronx":
+      return "#22d3ee";
+    case "bus-queens":
+      return "#2dd4bf";
+    case "bus-statenisland":
+      return "#facc15";
+    default:
+      return "#94a3b8";
+  }
 }
 
 /**
