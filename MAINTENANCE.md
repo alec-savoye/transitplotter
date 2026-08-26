@@ -101,42 +101,50 @@ The static SQLite, `track_records.json`, and `visits.json` all live in a
 
 ## 3. Data flow, end to end
 
-```
-                         ┌──────────────── static (once, cached) ─────────────┐
-                         │ build-static.ts → gtfs_static.sqlite                │
-                         │   subway ZIP + ferry ZIP + 5 bus ZIPs              │
-                         └───────────────────────┬────────────────────────────┘
-                                                 │ boot
-                                                 ▼
-  MTA subway (8 protobuf feeds) ─┐        static/load.ts  ──► in-memory routes,
-  NYC Ferry (GPS protobuf)       │         (canonical route/dir "lines")
-  MTA Bus / OneBusAway (GPS)     │              │
-                                 ▼              ▼
-          parse.ts / ferry.ts / bus.ts    routing/graph.ts (trip-planner graph)
-                                 │
-                                 ▼
-                    state.ts → ActiveLeg[]  (which segment each vehicle is on)
-                                 │
-                                 ▼
-                    legwire.ts → TrainLeg[] (compact wire format, sliced polyline)
-                                 │
-                    ┌────────────┼─────────────┐
-                    ▼            ▼              ▼
-             Broadcaster    TrackRecordStore  (60s alerts loop → FeedStore)
-             (ws.ts)        (reliability)
-                    │
-     WebSocket  { t, legs:[...] }  every ~20s
-                    │
-                    ▼
-        BROWSER: trains.ts interpolates each frame → MapLibre GeoJSON source
+```mermaid
+flowchart TD
+    subgraph static["Static (once, cached)"]
+        BS["build-static.ts"] --> DB[("gtfs_static.sqlite<br/>subway + ferry + 5 bus ZIPs")]
+        DB -->|boot| LOAD["static/load.ts<br/>canonical route/dir lines"]
+        LOAD --> GRAPH["routing/graph.ts<br/>trip-planner graph"]
+    end
+
+    subgraph feeds["Realtime feeds (protobuf)"]
+        SUB["MTA subway<br/>8 feeds, NO coords"]
+        FER["NYC Ferry<br/>GPS"]
+        BUS["MTA Bus / OneBusAway<br/>GPS"]
+    end
+
+    SUB --> PARSE["parse.ts<br/>FeedTrip[]"]
+    FER --> FERTS["ferry.ts"]
+    BUS --> BUSTS["bus.ts"]
+
+    PARSE --> STATE["state.ts<br/>ActiveLeg[]<br/>(segment per vehicle)"]
+    LOAD --> STATE
+    FERTS --> LW
+    BUSTS --> LW
+    STATE --> LW["legwire.ts<br/>TrainLeg[]<br/>(compact, sliced polyline)"]
+
+    LW --> BC["Broadcaster (ws.ts)"]
+    LW --> TR["TrackRecordStore<br/>(reliability)"]
+    LW --> IE["InterpErrorStore"]
+    LW --> CNT["CountStore"]
+
+    ALERTS["alerts.ts<br/>(60s loop)"] --> FS["FeedStore"]
+    PARSE --> FS
+
+    BC -->|"WebSocket { t, legs, cars? } every ~20s"| BROWSER["BROWSER: trains.ts<br/>interpolates each frame →<br/>MapLibre GeoJSON source"]
+    FS -->|"HTTP request/response"| BROWSER
 ```
 
 The two server timers that drive everything live in **`tick.ts`**:
 
-- `poll()` every **20s**: fetch subway + ferry + bus in parallel (tolerating
-  per-mode failure), build `TrainLeg[]`, feed the track-record tally, broadcast.
+- `poll()` every **20s**: fetch subway + ferry + bus + traffic in parallel
+  (tolerating per-mode failure), build `TrainLeg[]`, feed the track-record /
+  interp-error / count tallies, broadcast the `ServerMessage`.
 - `pollAlerts()` every **60s**: fetch + classify service alerts into `FeedStore`.
-- A third timer flushes track records to disk every **60s**.
+- Flush timers (**60s**) persist `TrackRecordStore`, `InterpErrorStore`, and
+  `CountStore` to JSON; `refreshCalibration()` re-derives the traffic α **daily**.
 
 ---
 
@@ -175,7 +183,10 @@ as "small / medium / large."
   prefixed `F:`, `mode:"ferry"`, carries speed + vessel id.
 - **`bus.ts`** — MTA Bus (OneBusAway) realtime → `ActiveLeg[]`. Real GPS,
   straight-line hop to next stop (no street geometry). `busBorough()` maps route
-  prefixes to borough codes. Ids prefixed `B:`, `mode:"bus"`.
+  prefixes to borough codes. Ids prefixed `B:`, `mode:"bus"`. Schedule deviation
+  comes from **`tripUpdate.delay`** (trip level) — the per-`stopTimeUpdate`
+  `arrival/departure.delay` is never populated on this feed and decodes to the
+  protobuf default `0` (see §9, "Track records report 0% late everywhere").
 - **`traffic.ts`** — Estimated car count (not `ActiveLeg`s — a scalar per poll).
   Keyless NYC DOT Traffic Speeds → Greenshields density → citywide estimate,
   calibrated to MTA CRZ entries. See the store description above and §6.6.
@@ -197,9 +208,10 @@ as "small / medium / large."
 - **`ws.ts`** — The big one. `Broadcaster` creates the `http.Server` +
   `WebSocketServer`, precomputes routes/stations GeoJSON, and owns **all HTTP
   routing**: `/plan`, `/routes`, `/geo/routes`, `/geo/stations`, `/visit`,
-  `/admin/login`, `/admin/stats`, `/trackrecords`, `/trackrecords/history`,
-  `/alerts`, `/status`, `/station/<id>/arrivals`, `/health`, `/`. Admin auth via
-  `ADMIN_PASSWORD` (default `"CONFIG"`). If you add an endpoint, it goes here.
+  `/admin/login`, `/admin/stats`, `/admin/health`, `/trackrecords`,
+  `/trackrecords/history`, `/interp/stats`, `/counts`, `/alerts`, `/status`,
+  `/station/<id>/arrivals`, `/health`, `/`. Admin auth via `ADMIN_PASSWORD`
+  (default `"CONFIG"`). If you add an endpoint, it goes here.
 
 ### Persistent stores (the only things written to disk at runtime)
 
@@ -353,17 +365,104 @@ files. If a control looks wrong, the style is in `index.html`, not in a `.ts`.
 
 ## 6. The shared wire contract
 
-`shared/src/types.ts` is the **only** place both sides agree on. No runtime code.
-Key types:
+`shared/src/types.ts` is the **only** place both sides agree on. No runtime code
+— pure `interface`/`type` declarations. Every field carries a doc comment in the
+source; this section is the map of *which type is served where* and the gotchas.
 
-- **`TrainLeg`** — the WebSocket vehicle payload. Deliberately **short field
-  names** to shrink the ~1000-vehicle broadcast: `id, r, path, d0, d1, hts, ns?,
-  dest?, dly?, mode?, label?, boro?, spd?, vid?`.
-- **`ServerMessage`** — `{ t, legs: TrainLeg[] }`.
-- **`RouteMeta`**, **`Arrival`/`StationArrivals`**, **`ServiceAlert`/`RouteStatus`**,
-  **`ItineraryLeg`/`Itinerary`**, and the track-record family
-  (`TrackRecordCell`, `TrackRecordDay`, `TrackRecordSnapshot`,
-  `TrackRecordHistory`).
+### 6.1 Where each type travels
+
+```mermaid
+flowchart LR
+    subgraph WS["WebSocket / (~20s)"]
+        SM["ServerMessage<br/>{ t, legs, cars? }"] --> TL["TrainLeg[]"]
+    end
+    subgraph HTTP["HTTP request/response"]
+        RM["RouteMeta[]  →  /routes"]
+        SA["StationArrivals  →  /station/:id/arrivals"]
+        AL["ServiceAlert[]  →  /alerts"]
+        RS["RouteStatus[]  →  /status"]
+        IT["Itinerary  →  /plan"]
+        TRS["TrackRecordSnapshot  →  /trackrecords"]
+        TRH["TrackRecordHistory  →  /trackrecords/history"]
+        IES["InterpErrorStats  →  /interp/stats"]
+        VCS["VehicleCountSeries  →  /counts"]
+    end
+
+    SA -.contains.-> ARR["Arrival (per direction)"]
+    SA -.contains.-> AL
+    IT -.contains.-> ITL["ItineraryLeg[]"]
+    TRS -.contains.-> TRC["TrackRecordCell[]"]
+    TRC -.per-mode.-> TMT["TrackRecordModeTally (subway, bus)"]
+    TRH -.contains.-> TRD["TrackRecordDay[]"]
+    IES -.contains.-> IEB["InterpErrorBucket (overall / byMode / byRoute)"]
+    IES -.trend.-> IED["InterpErrorDay[]"]
+    VCS -.contains.-> VCP["VehicleCountPoint[]"]
+```
+
+### 6.2 The WebSocket payload (the one high-frequency type)
+
+- **`ServerMessage`** = `{ t: number; legs: TrainLeg[]; cars?: number }`.
+  `t` is server epoch-ms when the batch was built; `cars` is the synthesized
+  NYC road-car estimate (absent if the traffic feed failed that poll).
+- **`TrainLeg`** — one vehicle's *current leg*. Field names are deliberately
+  **short** to shrink the ~1000-vehicle broadcast:
+
+  | Field  | Type | Meaning |
+  | ------ | ---- | ------- |
+  | `id`   | string | GTFS-realtime trip id (namespaced `F:`/`B:` for ferry/bus) |
+  | `r`    | string | Route id, for coloring (e.g. `1`, `A`, `L`) |
+  | `path` | `[lng,lat][]` | Segment polyline in travel order (curved track slice, or two stop coords as fallback) |
+  | `d0`   | epoch s | Departure from previous stop |
+  | `d1`   | epoch s | Predicted arrival at next stop |
+  | `hts`  | epoch s | Feed header timestamp (drives stall detection) |
+  | `ns?`  | string | Next stop name |
+  | `dest?`| string | Trip's final destination name |
+  | `dly?` | seconds | Estimated delay vs. typical segment time; `0`/absent = on time. **Buses source this from `tripUpdate.delay`** (see §9) |
+  | `mode?`| enum | `"ferry"` \| `"bus"`; **absent = subway** |
+  | `label?`| string | Vessel label (ferry) or route pill (bus) |
+  | `boro?`| string | Borough code for bus client-side toggling |
+  | `spd?` | m/s | Momentary speed (ferries/buses, when the feed reports it) |
+  | `vid?` | string | Vehicle/vessel id (e.g. ferry hull id) |
+
+  Note the **absent-means-subway** convention on `mode`: it saves a field on the
+  ~380 subway legs that dominate the frame. Consumers must default it.
+
+### 6.3 Request/response types (HTTP)
+
+- **`RouteMeta`** `{ id, color, name }` → `/routes`, once on load for legend/colors.
+- **`Arrival`** `{ route, color, express, eta, inSec, dest }` — a single upcoming
+  train at a station. **`StationArrivals`** `{ id, name, north[], south[], alerts? }`
+  groups them by direction → `/station/:id/arrivals`.
+- **`ServiceAlert`** `{ id, routes[], stops[], header, description, severity, effect }`.
+  `severity` is `1|2|3` (info/planned → delays → suspended), derived from
+  headline text (§9). → `/alerts`, and embedded in `StationArrivals.alerts`.
+- **`RouteStatus`** `{ route, color, severity, label }` — per-route worst
+  severity for the top strip → `/status`. Note `severity` here is `0|1|2|3`
+  (`0` = good service), one wider than `ServiceAlert`.
+- **`ItineraryLeg`** (`kind: "ride"|"walk"`, route/color, from/to id+name,
+  `stops[]`, `numStops`, `seconds`) and **`Itinerary`** (`seconds`, `transfers`,
+  `legs[]`, resolved `origin`/`destination`) → `/plan`.
+
+### 6.4 Persisted-history types (HTTP)
+
+- **Track records** (`/trackrecords`, `/trackrecords/history`):
+  - `TrackRecordModeTally` `{ late, total }` — per mode, per cell.
+  - `TrackRecordCell` `{ key, lat, lon, rate, total, ready, firstObs, lastObs,
+    subway, bus }` — one spatial mesh cell. `rate` is the **blended** late/total
+    across tracked modes; `ready` gates coloring on the 7-day span. **Ferries
+    have no tally** (no delay signal).
+  - `TrackRecordSnapshot` `{ totalObs, windowDays, readyCells, ready, cellStep,
+    cells[] }` — the whole overlay. `cellStep` = `[latStep, lonStep]` for drawing.
+  - `TrackRecordDay` `{ date, late, total }` and `TrackRecordHistory`
+    `{ key, lat, lon, days[] }` — the click-through "% late by day" series.
+- **Interp-error metrics** (`/interp/stats`): `InterpErrorBucket`
+  `{ n, mean, p50, p95 }` (meters), reported as `overall`, `byMode`, `byRoute`;
+  plus an `InterpErrorDay[]` trend and a `note` flagging that subway is a
+  snap-magnitude *proxy* while bus/ferry is true GPS error. See §6.5.
+- **Vehicle counts** (`/counts`): `VehicleCountPoint` `{ t, subway, bus, ferry,
+  subwayDelayed, busDelayed, ferryDelayed, cars }` sampled per poll;
+  `VehicleCountSeries` `{ windowMs, now, points[] }` is a rolling 48h window.
+  Older points predating a field (e.g. `*Delayed`, `cars`) default to `0`.
 
 **Rule of thumb:** any change to a field name or meaning here must be made on
 both the producer (server) and consumer (web) in the same commit, because
@@ -454,11 +553,21 @@ Understanding the seams is what makes debugging fast.
 | `parse.ts` | `FeedTrip[]` | `state.ts`, `arrivals.ts` |
 | `static/load.ts` | in-memory `StaticData` (routes/stops/lines) | `state.ts`, `ws.ts`, `routing/graph.ts`, `arrivals.ts` |
 | `state.ts` / `ferry.ts` / `bus.ts` | `ActiveLeg[]` | `legwire.ts` |
-| `legwire.ts` | `TrainLeg[]` | `ws.ts` (broadcast), `trackrecord.ts` (tally) |
+| `legwire.ts` | `TrainLeg[]` | `ws.ts` (broadcast), `trackrecord.ts`, `interp.ts`, `counts.ts` (via `tick.ts`) |
 | `alerts.ts` | `ServiceAlert[]` / `RouteStatus[]` | `feedstore.ts` → `ws.ts`, `arrivals.ts` |
-| `routing/graph.ts` | graph + `typical` times | `routing/plan.ts`, `legwire.ts` |
+| `routing/graph.ts` | graph + `typical` times | `routing/plan.ts`, `legwire.ts`, `state.ts` |
+| `traffic.ts` | `{ cars }` estimate | `tick.ts` → `ServerMessage.cars`, `counts.ts` |
+| `trackrecord.ts` | `TrackRecordSnapshot` / `TrackRecordHistory` | `ws.ts` |
+| `interp.ts` | `InterpErrorStats` | `ws.ts` |
+| `counts.ts` | `VehicleCountSeries` | `ws.ts` |
+| `visits.ts` | visit stats | `ws.ts` (`/admin/stats`) |
+| `health.ts` | `SourceHealth[]` | `ws.ts` (`/admin/health`); written by every feed fetch |
 
-`FeedStore` is the shared mailbox: the poll loop writes, HTTP handlers read.
+`FeedStore` is the shared mailbox: the poll loop writes the latest `FeedTrip[]`
++ `ServiceAlert[]`, HTTP handlers (arrivals/alerts/status) read. The four
+persistent stores (`trackrecord`, `interp`, `visits`, `counts`) are
+constructed in `index.ts`, fed by `tick.ts`, read by `ws.ts`, and flushed to
+JSON in the cache dir on a timer + on shutdown.
 
 ### Server ↔ web seam
 
@@ -610,6 +719,28 @@ they're gray and the modal explains the wait. Also, the cache dir must persist
 `track_records.json` across restarts — if the bind mount is wrong, the clock
 resets every deploy.
 
+### "Track records report 0% late everywhere" (fixed 2026-08)
+Every mesh tile graded as ~0% late (all green) even though trains and buses were
+visibly delayed. Root cause was in **`bus.ts`**: it read schedule deviation from
+`stopTimeUpdate.arrival.delay` / `.departure.delay`, but the OneBusAway bus feed
+**never populates those stop-level fields** — protobuf decodes the absent field
+to its default `0`, so every bus looked perfectly on time. The real deviation is
+carried once per trip in **`tripUpdate.delay`**. Because buses are ~87% of all
+track-record observations, that flood of false on-time bus samples dragged the
+blended per-cell late rate to ~0.01%, which rounds to 0%.
+
+Fix: read `tripUpdate.delay` (trip level) and attach it to the chosen next-stop
+prediction. Verify with:
+```bash
+# trip-level delay is populated; stop-level is not
+docker compose exec -T server node -e '...decode tripUpdates...; count t.delay vs s.arrival.delay'
+```
+Diagnostic signs this recurs: `/counts` shows `busDelayed` stuck at 0 while
+`subwayDelayed` is non-zero, and a live WS frame has no bus leg with `dly` set.
+Note the historical `track_records.json` still contains the pre-fix on-time bus
+samples; the blend self-corrects as new (correct) observations accumulate, or
+delete the file to reset (costs the 7-day window).
+
 ### "Alerts severity looks wrong"
 Severity is guessed from **headline text** (`classify()` in `alerts.ts`) because
 the feed reports `effect = UNKNOWN`. When MTA changes their wording, the
@@ -693,8 +824,10 @@ Ordered roughly by likelihood.
 - **Trip planner is typical-time, not timetable-exact**, and ignores realtime
   delays. A realtime-aware planner would be a real feature jump.
 - **Accessibility / keyboard nav** of the map UI is minimal.
-- **Observability.** There are `console` logs but no structured metrics/health
-  beyond `/health`. Consider counters for feed success rates and broadcast size.
+- **Observability.** Beyond `console` logs and `/health`, per-source upstream
+  health is now tracked (`health.ts` → `HealthRegistry`, served at
+  `/admin/health`: last poll/ok time, data freshness, item count, last error).
+  Still missing: broadcast-size counters and feed-success-rate trends over time.
 
 ---
 

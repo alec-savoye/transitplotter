@@ -206,7 +206,15 @@ location automatically, so `http://<LAN-IP>:5173` just works.
 | `/alerts`                     | all active subway service alerts (`ServiceAlert[]`) |
 | `/status`                     | per-route rolled-up status (`RouteStatus[]`)      |
 | `/plan?from=..&to=..`         | plan a journey between two places (`Itinerary`)   |
-| WebSocket `/`                 | pushes `{ t, legs: [...] }` when the feed refreshes |
+| `/trackrecords`               | reliability mesh snapshot (`TrackRecordSnapshot`) |
+| `/trackrecords/history?key=`  | per-day lateness history for one mesh cell (`TrackRecordHistory`) |
+| `/interp/stats`               | interpolation-error metrics (`InterpErrorStats`)  |
+| `/counts`                     | rolling 48h vehicle/car counts (`VehicleCountSeries`) |
+| `/visit`                      | visitor analytics beacon                          |
+| `/admin/login`                | admin password check                              |
+| `/admin/stats`                | visitor stats (requires admin key)                |
+| `/admin/health`               | external data-source health (requires admin key)  |
+| WebSocket `/`                 | pushes `{ t, legs: [...], cars? }` when the feed refreshes |
 
 `from`/`to` may be free-text addresses (geocoded, biased to NYC) or a literal
 `lat,lon` pair. The response is an `Itinerary` with ride legs (route, boarding
@@ -255,13 +263,16 @@ interpolating along `path` by time fraction each frame.
    (`5..N08R`, `GS.N01R`, `SI..S03R`); the parser accepts all forms. Routes with
    no shapes of their own (e.g. **W**) borrow a parallel line's geometry (W→N)
    so they still follow the track instead of drawing straight segments.
-4. **Interpolate (browser):** every animation frame, compute
-   `progress = (now - d0) / (d1 - d0)` and place the train at that fraction
-   **along the leg polyline** (by arc length), deriving bearing and status
-   (`moving`/`stopped`/`stalled`, the last when the feed header is >90 s stale).
-   This keeps motion smooth at the display's frame rate with no per-second
-   server traffic — the interpolation work was moved off the server to fix the
-   streaming lag.
+4. **Interpolate (browser):** every animation frame, place the train **along
+   the leg polyline** (by arc length) using a **trapezoidal speed profile**
+   (accelerate out of a stop, cruise, decelerate in, then dwell) rather than a
+   naive constant speed, then chase that target with an along-track follower so
+   positions stay continuous across the ~20s refreshes. Bearing and status
+   (`moving`/`stopped`/`stalled`, the last when the feed header is >90 s stale)
+   are derived the same frame. This keeps motion smooth at the display's frame
+   rate with no per-second server traffic. The motion math lives in
+   [`shared/src/kinematics.ts`](shared/src/kinematics.ts) and is shared by the
+   client renderer and the server's error metrics; see MAINTENANCE.md §6.5.
 
 ### Live arrivals
 
@@ -300,36 +311,54 @@ the cached static data — no extra persistence.
 ## Source layout
 
 ```
-shared/src/types.ts        wire contract (TrainSnapshot, StationArrivals,
-                             ServiceAlert, RouteStatus, Itinerary, ...)
-scripts/build-static.ts    download GTFS static ZIP -> cached SQLite
+shared/src/
+  types.ts                 wire contract (TrainLeg, ServerMessage,
+                             StationArrivals, ServiceAlert, RouteStatus,
+                             Itinerary, TrackRecord*, InterpErrorStats,
+                             VehicleCount*)
+  kinematics.ts            shared motion math (trapezoidal profile, projection);
+                             used by both client renderer and server metrics
+scripts/build-static.ts    download GTFS static ZIPs -> cached SQLite
 server/src/
-  feeds.ts                 realtime + alerts feed URLs + poll intervals
+  index.ts                 entry: load static, build graph + stores, start loops
+  feeds.ts                 realtime/alerts/traffic feed URLs + poll intervals
   parse.ts                 fetch + decode GTFS-realtime protobuf (positions)
   alerts.ts                fetch + classify service alerts; per-route rollup
   feedstore.ts             holds latest parsed feed + alerts for lookups
   state.ts                 realtime + static -> active "legs" per train
   ferry.ts                 NYC Ferry realtime -> GPS legs (mode:ferry)
   bus.ts                   MTA Bus realtime -> GPS legs (mode:bus, borough)
+  traffic.ts               synthesized NYC car-count estimate (CRZ-calibrated)
   legwire.ts               ActiveLeg -> compact TrainLeg (segment polyline)
   arrivals.ts              build per-station arrivals board (+ station alerts)
+  trackrecord.ts           persisted reliability mesh (TrackRecordStore)
+  interp.ts                interpolation-error metrics (InterpErrorStore)
+  counts.ts                rolling 48h vehicle/car counts (CountStore)
+  visits.ts                visitor analytics (VisitStore)
+  health.ts               upstream data-source health registry
   routing/graph.ts         build ride + transfer graph from the schedule
   routing/plan.ts          Dijkstra journey search -> itinerary legs
   routing/geocode.ts       address -> coordinate (configurable Nominatim)
   tick.ts                  poll feeds (20s) + alerts (60s); broadcast legs
-  ws.ts                    WebSocket broadcaster + HTTP endpoints
+  ws.ts                    WebSocket broadcaster + all HTTP endpoints
   static/load.ts           load SQLite; build canonical route/dir lines
   static/geometry.ts       project/interpolate points along shapes
 web/src/
-  main.ts                  bootstrap: map, layers, legend, popups, panels
-  basemap.ts               map style, route/station/train layers, disruption
-  bullets.ts               render MTA route-bullet icons to canvas
+  main.ts                  bootstrap: map, layers, legend, popups, panels, HUD
+  config.ts                backend host resolution (LAN-aware) + view mode
+  basemap.ts               map style, route/station/vehicle layers, disruption
+  bullets.ts               render MTA route/ferry/bus bullet icons to canvas
   trains.ts                interpolate live positions from legs each frame
-  ui.ts                    line legend + click-a-train popup
+  ui.ts                    line legend + click-a-vehicle popup
   station.ts               click-a-station arrivals panel (+ alerts)
   alerts.ts                line-status strip + alerts drawer
   planner.ts               trip planner UI + itinerary map highlight
-  config.ts                backend host resolution (LAN-aware)
+  hotspot.ts               delay-cluster click summary
+  trackrecords.ts          reliability mesh client (polls /trackrecords)
+  trackrecord-summary.ts   click-a-cell rationale + % late by day plot
+  isolate.ts               single-line isolate view + stats
+  counts-modal.ts          48h vehicle/car charts (double-click the HUD)
+  admin.ts                 hidden admin overlay (visitor + source health)
 ```
 
 ## Roadmap

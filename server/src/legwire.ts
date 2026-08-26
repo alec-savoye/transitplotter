@@ -87,7 +87,7 @@ export function buildTrainLegs(legs: ActiveLeg[], graph: RoutingGraph): TrainLeg
       d1 = d0 + minDuration;
     }
 
-    // Delay estimate. Prefer a feed-reported delay (buses supply arrival.delay);
+    // Delay estimate. Prefer a feed-reported delay (buses supply tripUpdate.delay);
     // otherwise estimate from the typical (median) segment time (subway, which
     // has no direct delay field). Ferries carry neither, so they stay 0.
     let dly: number | undefined;

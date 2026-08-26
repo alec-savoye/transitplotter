@@ -70,18 +70,19 @@ export async function fetchBusLegs(stat: StaticData): Promise<ActiveLeg[]> {
     const t = e.tripUpdate;
     if (!t?.trip?.tripId) continue;
     const tripId = B(t.trip.tripId);
+    // Schedule deviation (seconds late vs schedule). MTA Bus Time reports this
+    // at the TRIP level (tripUpdate.delay), NOT per stopTimeUpdate — the
+    // stop-level arrival/departure.delay is never populated on the wire and
+    // decodes to the protobuf default 0. Reading the stop-level field made
+    // every bus look on-time, which (since buses are ~87% of track-record
+    // observations) collapsed every mesh tile's late rate to ~0%.
+    const tripDelay =
+      t.delay != null && Number.isFinite(Number(t.delay)) ? Number(t.delay) : null;
     let best: { stopId: string; arr: number; delay: number | null } | null = null;
     for (const s of t.stopTimeUpdate ?? []) {
       const arr = s.arrival?.time != null ? Number(s.arrival.time) : s.departure?.time != null ? Number(s.departure.time) : null;
       if (arr == null || !s.stopId) continue;
-      // arrival.delay (seconds late vs schedule) is provided by the bus feed.
-      const delay =
-        s.arrival?.delay != null
-          ? Number(s.arrival.delay)
-          : s.departure?.delay != null
-            ? Number(s.departure.delay)
-            : null;
-      if (arr >= nowSec && (!best || arr < best.arr)) best = { stopId: B(s.stopId), arr, delay };
+      if (arr >= nowSec && (!best || arr < best.arr)) best = { stopId: B(s.stopId), arr, delay: tripDelay };
     }
     if (best) nextArr.set(tripId, best);
   }

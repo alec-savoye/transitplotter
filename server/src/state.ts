@@ -35,7 +35,8 @@ export interface ActiveLeg {
 
   /**
    * Delay in seconds reported directly by the feed (buses supply this via
-   * tripUpdate arrival.delay). When set, legwire uses it instead of estimating
+   * tripUpdate.delay, the trip-level schedule deviation). When set, legwire
+   * uses it instead of estimating
    * from median segment times.
    */
   delaySec?: number;
