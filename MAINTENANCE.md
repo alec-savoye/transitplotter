@@ -362,13 +362,17 @@ files. If a control looks wrong, the style is in `index.html`, not in a `.ts`.
   suffixes ("6X") map to the base line's stations.
 - **`counts-modal.ts`** — `setupCountsModal`: double-click / double-tap the Live
   HUD to open a modal with two stacked 48-hour line charts (active vehicles,
-  then delayed vehicles), each split by subway/bus/ferry. The active chart also
-  plots estimated **cars** on a **right-hand Y axis** (their own scale, since
-  cars are ~1000× the transit counts); the "Cars (est.)" control toggles that
-  series (and the HUD 🚗 line) on/off via `carsShown()` in `main.ts`. Fetches a
-  static snapshot from `/counts` on open; renders inline SVG via a shared
-  `plotSvg` (left/right axis chosen per series). X axis is a fixed 48h window;
-  the pre-data gap is shaded "no data".
+  then delayed vehicles). The **active** chart plots subway/bus/ferry on the
+  left axis and estimated **cars** on a **right-hand Y axis** (their own scale,
+  since cars are ~1000× the transit counts); the "Cars (est.)" control toggles
+  that series (and the HUD 🚗 line) on/off via `carsShown()` in `main.ts`. The
+  **delayed** chart keeps subway + ferry on the left axis and splits **delayed
+  buses by borough** (5 lines from `VehicleCountPoint.busDelayedBoro`) onto the
+  **right-hand Y axis** — delayed buses run ~1–2 orders of magnitude higher, so
+  a shared axis would flatten subway/ferry. Fetches a static snapshot from
+  `/counts` on open; renders inline SVG via a shared `plotSvg` (left/right axis
+  chosen per series). X axis is a fixed 48h window; the pre-data gap is shaded
+  "no data".
 
 ---
 
@@ -475,7 +479,9 @@ flowchart LR
   plus an `InterpErrorDay[]` trend and a `note` flagging that subway is a
   snap-magnitude *proxy* while bus/ferry is true GPS error. See §6.5.
 - **Vehicle counts** (`/counts`): `VehicleCountPoint` `{ t, subway, bus, ferry,
-  subwayDelayed, busDelayed, ferryDelayed, cars }` sampled per poll;
+  subwayDelayed, busDelayed, busDelayedBoro?, ferryDelayed, cars }` sampled per
+  poll (`busDelayedBoro` is a per-borough map of delayed buses that sums to
+  `busDelayed`; absent on points recorded before it existed);
   `VehicleCountSeries` `{ windowMs, now, points[] }` is a rolling 48h window.
   Older points predating a field (e.g. `*Delayed`, `cars`) default to `0`.
 

@@ -265,12 +265,18 @@
       .cm-grid { stroke: #263041; stroke-width: 0.5; }
       .cm-ylab, .cm-xlab { fill: #64748b; font-size: 8px; }
       .cm-ylab { text-anchor: end; }
-      .cm-ylab-right { text-anchor: start; fill: #f472b6; }
+      .cm-ylab-right { text-anchor: start; fill: #94a3b8; }
       .cm-line { fill: none; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
       .cm-line.subway { stroke: #fbbf24; }
       .cm-line.bus { stroke: #4ade80; }
       .cm-line.ferry { stroke: #38bdf8; }
       .cm-line.cars { stroke: #f472b6; }
+      /* Delayed-bus per-borough lines (right axis). */
+      .cm-line.bus-manhattan { stroke: #4ade80; }
+      .cm-line.bus-brooklyn { stroke: #a3e635; }
+      .cm-line.bus-bronx { stroke: #22d3ee; }
+      .cm-line.bus-queens { stroke: #2dd4bf; }
+      .cm-line.bus-statenisland { stroke: #facc15; }
       .cm-nodata-band { fill: rgba(148,163,184,0.08); }
       .cm-nodata-lab { fill: #64748b; font-size: 8px; text-anchor: middle; }
 
@@ -633,7 +639,7 @@
         <div class="cm-sub">Active subway trains, buses, ferries, and estimated cars on NYC roads.</div>
         <div class="cm-chart cm-chart-active"></div>
         <div class="cm-legend cm-legend-active"></div>
-        <div class="cm-sub cm-sub-delay">Delayed vehicles (predicted delay ≥ 2 min).</div>
+        <div class="cm-sub cm-sub-delay">Delayed vehicles (predicted delay ≥ 2 min). Subway &amp; ferry on the left axis; buses split by borough on the right axis.</div>
         <div class="cm-chart cm-chart-delay"></div>
         <div class="cm-legend cm-legend-delay"></div>
         <button class="cm-close" type="button">Close</button>
