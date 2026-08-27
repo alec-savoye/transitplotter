@@ -1,0 +1,38 @@
+{
+  "tripId": "TRIP001",
+  "routeId": "6X",
+  "headerTs": 1700000000,
+  "stopUpdates": [
+    { "stopId": "8096", "arrival": 1700000100, "departure": 1700000180 },
+    { "stopId": "8097", "arrival": 1700000180, "departure": 1700000260 },
+    { "stopId": "8098", "arrival": 1700000260, "departure": 1700000340 }
+  ]
+},
+{
+  "tripId": "TRIP002",
+  "routeId": "1",
+  "headerTs": 1700000000,
+  "stopUpdates": [
+    { "stopId": "127", "arrival": 1700000100, "departure": 1700000150 },
+    { "stopId": "128", "arrival": 1700000150, "departure": 1700000200 }
+  ]
+},
+{
+  "tripId": "TRIP003",
+  "routeId": "W",
+  "headerTs": 1700000000,
+  "stopUpdates": [
+    { "stopId": "125", "departure": 1700000100 },
+    { "stopId": "126", "arrival": 1700000200, "departure": 1700000250 }
+  ]
+},
+{
+  "tripId": "TRIP004",
+  "routeId": "A",
+  "headerTs": 1700000000,
+  "stopUpdates": [
+    { "stopId": "1", "arrival": 1700000100, "departure": 1700000200 },
+    { "stopId": "2", "arrival": 1700000200, "departure": 1700000300 },
+    { "stopId": "3", "arrival": 1700000300, "departure": 1700000400 }
+  ]
+}
