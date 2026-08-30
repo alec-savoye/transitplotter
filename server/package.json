@@ -6,7 +6,11 @@
   "main": "src/index.ts",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "start": "tsx src/index.ts"
+    "start": "tsx src/index.ts",
+    "test": "jest --coverage --ci",
+    "test:watch": "jest --watch",
+    "test:server": "jest --coverage tests/server",
+    "test:shared": "jest --coverage tests/shared"
   },
   "dependencies": {
     "@transitplotter/shared": "*",

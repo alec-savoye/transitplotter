@@ -45,6 +45,10 @@ Everything runs in Docker; nothing is installed on the host.
   itinerary (route bullets, transfers, per-leg stop counts and times) that is
   drawn on the map.
 - **Line legend** and an MTA data-source **disclaimer** footer.
+- **Mobile-friendly layout**: on phones/touch devices the controls collapse
+  behind a ☰ menu button, the HUD shrinks to a compact status chip, and the
+  legend is hidden so the map stays unobstructed. A **View** control forces
+  Auto / Mobile / Desktop layout (and the matching performance profile).
 
 ---
 

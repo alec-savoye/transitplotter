@@ -31,6 +31,10 @@ const TRACK_FLUSH_INTERVAL_MS = 60_000;
  *  the track-record late threshold and the HUD's "delayed" tally. */
 const LATE_THRESHOLD_S = 120;
 
+/** Predicted delay (s) at/above which a vehicle counts as "severely delayed"
+ *  (≥ 10 min) — drives the second delay chart. */
+const VERY_LATE_THRESHOLD_S = 600;
+
 export function startLoops(
   stat: StaticData,
   broadcaster: Broadcaster,
@@ -85,25 +89,47 @@ export function startLoops(
       let subwayDelayed = 0,
         busDelayed = 0,
         ferryDelayed = 0;
+      let subwayVeryDelayed = 0,
+        busVeryDelayed = 0,
+        ferryVeryDelayed = 0;
       const busDelayedBoro: Record<string, number> = {};
+      const busVeryDelayedBoro: Record<string, number> = {};
+      const busActiveBoro: Record<string, number> = {};
       for (const l of legs) {
-        if ((l.dly ?? 0) < LATE_THRESHOLD_S) continue;
         const mode = l.mode ?? "subway";
+        const dly = l.dly ?? 0;
+        const boro = l.boro || "unknown";
+        // Per-borough *active* bus totals (denominator for normalized lateness).
+        if (mode === "bus") {
+          busActiveBoro[boro] = (busActiveBoro[boro] ?? 0) + 1;
+        }
+        if (dly < LATE_THRESHOLD_S) continue;
         if (mode === "bus") {
           busDelayed++;
-          const boro = l.boro || "unknown";
           busDelayedBoro[boro] = (busDelayedBoro[boro] ?? 0) + 1;
         } else if (mode === "ferry") ferryDelayed++;
         else subwayDelayed++;
+        // Severe tier (≥ 10 min): a subset of the delayed above.
+        if (dly < VERY_LATE_THRESHOLD_S) continue;
+        if (mode === "bus") {
+          busVeryDelayed++;
+          busVeryDelayedBoro[boro] = (busVeryDelayedBoro[boro] ?? 0) + 1;
+        } else if (mode === "ferry") ferryVeryDelayed++;
+        else subwayVeryDelayed++;
       }
       counts.record({
         subway: active.length,
         bus: bus.length,
+        busActiveBoro,
         ferry: ferry.length,
         subwayDelayed,
         busDelayed,
         busDelayedBoro,
         ferryDelayed,
+        subwayVeryDelayed,
+        busVeryDelayed,
+        busVeryDelayedBoro,
+        ferryVeryDelayed,
         cars: cars ?? 0,
       });
       broadcaster.broadcast({ t: Date.now(), legs, cars });

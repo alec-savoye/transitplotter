@@ -133,6 +133,53 @@ observability" open-item now that `health.ts` + `/admin/health` exist.
 changes (git status showed them unstaged; only `5c85e9d "updates"` predates this
 session). Commit when ready.
 
+### 2026-08 (later) — 48h delay charts (borough split, normalize, ≥10min) + mobile UX
+
+Continuation session on the `/counts` HUD charts and mobile layout. All changes
+typechecked (`tsc --noEmit` web+server) and deployed via
+`docker compose up -d --build`.
+
+**1. Delayed-bus lines split by borough on their own right axis.**
+- Added per-borough tallies to the counts sample: server (`tick.ts`) now fills
+  `busDelayedBoro` (and `busActiveBoro`) each poll; persisted/loaded in
+  `counts.ts`; typed in `shared/src/types.ts` (`Partial<Record<string,number>>`,
+  absent on old points). The delay chart draws 5 borough lines on the right Y
+  axis (subway+ferry stay on the left) since delayed buses are ~1–2 orders of
+  magnitude higher.
+
+**2. "Bus lateness: Count / % of active" normalize toggle.**
+- Per-chart button that recomputes the bus lines as `busXDelayedBoro /
+  busActiveBoro` on a fixed 0–100 % right axis (`rightMax`/`pct` on the series).
+  `busActiveBoro` is the denominator (active buses per borough per sample).
+
+**3. Second delay chart for ≥10 min ("severely delayed").**
+- New tier fields `subwayVeryDelayed` / `busVeryDelayed` / `busVeryDelayedBoro`
+  / `ferryVeryDelayed` (threshold `VERY_LATE_THRESHOLD_S = 600`, a subset of the
+  ≥120s tier). `counts-modal.ts` was refactored so both delay charts share one
+  `bindDelayChart(tier, suffix)` with a `DelayTier` accessor
+  (`TIER_DELAYED` / `TIER_VERY_DELAYED`); each chart keeps its own independent
+  normalize toggle.
+- **Caveat:** these per-borough / severe / active fields are only recorded from
+  their deploy forward — older points in the rolling 48h window plot as 0 for
+  the new series until they age out. Not a bug.
+
+**4. Mobile declutter.**
+- Controls now collapse behind a ☰ `#menu-fab` that slides in `#controls`
+  (`tp-menu-open` on `<html>`, wired by `setupMobileMenu()` in `main.ts`). HUD
+  shrinks to a status chip, legend hidden. Mobile CSS keys off a new
+  `tp-mobile-on` class that `config.ts` sets whenever `IS_MOBILE` is effective;
+  the rules are duplicated under the `@media` query (auto) and the class
+  (forced) because CSS can't OR them. Tapping a top-level control closes the
+  menu (bus-borough toggles exempt); tapping the map closes it too.
+- Verified with headless Chrome at 390×844 (menu opens/closes, legend+HUD lines
+  hidden) and 1400×900 (no menu button, full controls, `<html>` has no mobile
+  class). Desktop unchanged.
+
+**Files touched:** `server/src/{tick,counts}.ts`, `shared/src/types.ts`,
+`web/src/{counts-modal,config,main}.ts`, `web/index.html`, docs
+`README.md` / `MAINTENANCE.md` / `AGENTS.md`. Note interim commit
+`b2f549f "is this slop?"` landed mid-session; later edits are working-tree.
+
 ---
 
 ## Known gotchas / landmines (carry forward)

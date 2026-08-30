@@ -1,14 +1,17 @@
 // "Vehicles over the last 48 hours" chart modal.
 //
-// Double-click / double-tap the top-left Live HUD to open a modal with two
+// Double-click / double-tap the top-left Live HUD to open a modal with three
 // time-series line plots over a rolling 48-hour window, each split by mode
 // (subway / bus / ferry):
 //   1. active vehicles
-//   2. delayed vehicles (predicted delay ≥ 120s)
-// The X axis always spans the full 48h; the plotted lines only cover the range
-// for which data exists, and any leading gap (before the oldest sample) is
-// shaded with a "no data" note. A static snapshot is fetched each time the
-// modal opens (GET /counts).
+//   2. delayed vehicles (predicted delay ≥ 2 min)
+//   3. severely delayed vehicles (predicted delay ≥ 10 min)
+// The two delay charts share identical functionality (per-borough bus lines on
+// their own right axis + a "Count / % of active" normalize toggle). The X axis
+// always spans the full 48h; the plotted lines only cover the range for which
+// data exists, and any leading gap (before the oldest sample) is shaded with a
+// "no data" note. A static snapshot is fetched each time the modal opens
+// (GET /counts).
 
 import type { VehicleCountSeries, VehicleCountPoint } from "@transitplotter/shared";
 import { carsShown } from "./main.js";
@@ -23,6 +26,8 @@ interface ChartSeries {
   value: (p: VehicleCountPoint) => number;
   /** Plot against the right-hand Y axis (its own scale) instead of the left. */
   rightAxis?: boolean;
+  /** Fixed maximum for the right axis (e.g. 100 for a percentage). */
+  rightMax?: number;
 }
 
 interface LegendMode {
@@ -32,6 +37,10 @@ interface LegendMode {
   value: (p: VehicleCountPoint) => number;
   /** Plot against the right-hand Y axis (its own scale) instead of the left. */
   rightAxis?: boolean;
+  /** Fixed maximum for the right axis (e.g. 100 for a percentage). */
+  rightMax?: number;
+  /** Render the legend value as a percentage (e.g. "12%") instead of a count. */
+  pct?: boolean;
 }
 
 /** Modes drawn in the ACTIVE-vehicles chart (transit + estimated cars). Cars
@@ -54,25 +63,71 @@ const BUS_BOROUGHS: { code: string; label: string; cls: string }[] = [
   { code: "statenisland", label: "🚌 Bus · Staten Is.", cls: "bus-statenisland" },
 ];
 
-/** Delayed buses in one borough at a sample (0 when the breakdown is absent). */
-function busBoroDelayed(p: VehicleCountPoint, code: string): number {
-  return p.busDelayedBoro?.[code] ?? 0;
+/**
+ * A delay tier selects which fields on a sample point supply the per-mode and
+ * per-borough delayed counts. Both charts share identical rendering logic; only
+ * these accessors differ (≥ 2 min vs. ≥ 10 min).
+ */
+interface DelayTier {
+  subway: (p: VehicleCountPoint) => number;
+  ferry: (p: VehicleCountPoint) => number;
+  busBoro: (p: VehicleCountPoint, code: string) => number;
 }
 
-/** Modes drawn in the DELAY chart (transit only — cars have no delay signal).
- *  Subway + ferry share the left axis; delayed buses are split by borough on
- *  the right-hand axis so all delay signals can be observed together. */
-const DELAY_MODES: LegendMode[] = [
-  { key: "subway", label: "🚇 Subway", cls: "subway", value: (p) => p.subwayDelayed },
-  { key: "ferry", label: "⛴ Ferry", cls: "ferry", value: (p) => p.ferryDelayed },
-  ...BUS_BOROUGHS.map((b) => ({
-    key: "bus" as ModeKey,
-    label: b.label,
-    cls: b.cls,
-    value: (p: VehicleCountPoint) => busBoroDelayed(p, b.code),
-    rightAxis: true,
-  })),
-];
+const TIER_DELAYED: DelayTier = {
+  subway: (p) => p.subwayDelayed,
+  ferry: (p) => p.ferryDelayed,
+  busBoro: (p, code) => p.busDelayedBoro?.[code] ?? 0,
+};
+
+const TIER_VERY_DELAYED: DelayTier = {
+  subway: (p) => p.subwayVeryDelayed ?? 0,
+  ferry: (p) => p.ferryVeryDelayed ?? 0,
+  busBoro: (p, code) => p.busVeryDelayedBoro?.[code] ?? 0,
+};
+
+/** Active buses in one borough at a sample (0 when the breakdown is absent). */
+function busBoroActive(p: VehicleCountPoint, code: string): number {
+  return p.busActiveBoro?.[code] ?? 0;
+}
+
+/**
+ * Normalized bus lateness in one borough for a tier: delayed / active as a
+ * percentage 0..100 for plotting. Returns 0 when there are no active buses in
+ * that borough at the sample (or the breakdown is absent).
+ */
+function busBoroLateFrac(tier: DelayTier, p: VehicleCountPoint, code: string): number {
+  const active = busBoroActive(p, code);
+  if (active <= 0) return 0;
+  return (tier.busBoro(p, code) / active) * 100;
+}
+
+/**
+ * Modes drawn in a DELAY chart (transit only — cars have no delay signal).
+ * Subway + ferry share the left axis; delayed buses are split by borough on the
+ * right-hand axis so all delay signals can be observed together. Built per
+ * render so it can honor the per-chart "Bus lateness: Count / % of active"
+ * toggle. `normalized` picks raw counts vs. % of active buses.
+ */
+function delayModes(tier: DelayTier, normalized: boolean): LegendMode[] {
+  return [
+    { key: "subway", label: "🚇 Subway", cls: "subway", value: tier.subway },
+    { key: "ferry", label: "⛴ Ferry", cls: "ferry", value: tier.ferry },
+    ...BUS_BOROUGHS.map((b) => ({
+      key: "bus" as ModeKey,
+      label: b.label,
+      cls: b.cls,
+      value: normalized
+        ? (p: VehicleCountPoint) => busBoroLateFrac(tier, p, b.code)
+        : (p: VehicleCountPoint) => tier.busBoro(p, b.code),
+      rightAxis: true,
+      // Percent axis is fixed 0..100; counts auto-scale (undefined).
+      rightMax: normalized ? 100 : undefined,
+      // Render normalized values as "12%" in the legend.
+      pct: normalized,
+    })),
+  ];
+}
 
 /** Wire the HUD double-click/tap trigger and the modal open/close behavior. */
 export function setupCountsModal(serverHttp: string) {
@@ -82,20 +137,68 @@ export function setupCountsModal(serverHttp: string) {
 
   const activeChart = modal.querySelector<HTMLElement>(".cm-chart-active");
   const activeLegend = modal.querySelector<HTMLElement>(".cm-legend-active");
-  const delayChart = modal.querySelector<HTMLElement>(".cm-chart-delay");
-  const delayLegend = modal.querySelector<HTMLElement>(".cm-legend-delay");
   const closeBtn = modal.querySelector<HTMLButtonElement>(".cm-close");
+
+  /** Latest fetched series, kept so the normalize toggles can redraw instantly. */
+  let latest: VehicleCountSeries | null = null;
+
+  /**
+   * Bind one delay chart (either the ≥2min or ≥10min tier) to its DOM triplet
+   * (chart / legend / normalize button). Returns a render fn + keeps its own
+   * normalized state so the two charts toggle independently.
+   */
+  function bindDelayChart(tier: DelayTier, suffix: string) {
+    const chart = modal!.querySelector<HTMLElement>(`.cm-chart-delay${suffix}`);
+    const legend = modal!.querySelector<HTMLElement>(`.cm-legend-delay${suffix}`);
+    const normBtn = modal!.querySelector<HTMLButtonElement>(`.cm-norm-toggle${suffix}`);
+    let normalized = false;
+
+    const render = () => {
+      if (!latest) return;
+      const modes = delayModes(tier, normalized);
+      const chartSeries: ChartSeries[] = modes.map((m) => ({
+        cls: m.cls,
+        value: m.value,
+        rightAxis: m.rightAxis,
+        rightMax: m.rightMax,
+      }));
+      if (chart) chart.innerHTML = plotSvg(latest, chartSeries);
+      if (legend) legend.innerHTML = legendHtml(latest, modes);
+      if (normBtn)
+        normBtn.textContent = normalized
+          ? "Bus lateness: % of active"
+          : "Bus lateness: Count";
+    };
+
+    normBtn?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      normalized = !normalized;
+      render();
+    });
+
+    const clear = () => {
+      if (chart) chart.innerHTML = "";
+      if (legend) legend.innerHTML = "";
+    };
+
+    return { render, clear };
+  }
+
+  // Two delay charts sharing identical functionality: ≥2 min and ≥10 min.
+  const delayed = bindDelayChart(TIER_DELAYED, "");
+  const veryDelayed = bindDelayChart(TIER_VERY_DELAYED, "-severe");
 
   const open = async () => {
     modal.classList.add("show");
     if (activeChart) activeChart.innerHTML = `<div class="cm-empty">Loading…</div>`;
-    if (delayChart) delayChart.innerHTML = "";
+    delayed.clear();
+    veryDelayed.clear();
     if (activeLegend) activeLegend.innerHTML = "";
-    if (delayLegend) delayLegend.innerHTML = "";
     try {
       const series: VehicleCountSeries = await (
         await fetch(`${serverHttp}/counts`)
       ).json();
+      latest = series;
       // Respect the "Cars (est.)" toggle: drop the cars series when it's off.
       const showCars = carsShown();
       const activeModes = ACTIVE_MODES.filter((m) => m.key !== "cars" || showCars);
@@ -106,12 +209,13 @@ export function setupCountsModal(serverHttp: string) {
       }));
       if (activeChart) activeChart.innerHTML = plotSvg(series, activeChartSeries);
       if (activeLegend) activeLegend.innerHTML = legendHtml(series, activeModes);
-      if (delayChart) delayChart.innerHTML = plotSvg(series, delaySeries);
-      if (delayLegend) delayLegend.innerHTML = legendHtml(series, DELAY_MODES);
+      delayed.render();
+      veryDelayed.render();
     } catch {
       if (activeChart)
         activeChart.innerHTML = `<div class="cm-empty">Could not load count history.</div>`;
-      if (delayChart) delayChart.innerHTML = "";
+      delayed.clear();
+      veryDelayed.clear();
     }
   };
   const close = () => modal.classList.remove("show");
@@ -145,22 +249,16 @@ export function setupCountsModal(serverHttp: string) {
   });
 }
 
-/** Delay-chart series (transit only; built once). The active-chart series is
- *  built per-open so it can honor the "Cars (est.)" toggle. */
-const delaySeries: ChartSeries[] = DELAY_MODES.map((m) => ({
-  cls: m.cls,
-  value: m.value,
-  rightAxis: m.rightAxis,
-}));
-
 /** Legend with the latest value for each mode (uses the same accessors). */
 function legendHtml(data: VehicleCountSeries, modes: LegendMode[]): string {
   const last = data.points[data.points.length - 1];
   return modes
     .map((m) => {
-      const v = last ? Math.round(m.value(last)) : 0;
+      const raw = last ? m.value(last) : 0;
+      const v = Math.round(raw);
+      const shown = m.pct ? `${v}%` : v.toLocaleString();
       const axis = m.rightAxis ? ` <span class="cm-axis-note">(right axis)</span>` : "";
-      return `<span><i class="cm-swatch" style="background:${swatchColor(m.cls)}"></i>${m.label}: <b>${v.toLocaleString()}</b>${axis}</span>`;
+      return `<span><i class="cm-swatch" style="background:${swatchColor(m.cls)}"></i>${m.label}: <b>${shown}</b>${axis}</span>`;
     })
     .join("");
 }
@@ -225,8 +323,12 @@ function plotSvg(data: VehicleCountSeries, series: ChartSeries[]): string {
     for (const s of leftSeries) maxL = Math.max(maxL, s.value(p));
     for (const s of rightSeries) maxR = Math.max(maxR, s.value(p));
   }
+  // A right-hand series may pin a fixed max (e.g. 100 for a percentage axis).
+  const fixedRightMax = rightSeries.find((s) => s.rightMax != null)?.rightMax;
+  // Right-axis labels get a "%" suffix when the axis is a fixed 0..100 scale.
+  const rightIsPct = fixedRightMax === 100;
   const yMaxL = niceMax(Math.max(1, maxL));
-  const yMaxR = niceMax(Math.max(1, maxR));
+  const yMaxR = fixedRightMax != null ? fixedRightMax : niceMax(Math.max(1, maxR));
   const yAtL = (v: number) => padT + ih - (v / yMaxL) * ih;
   const yAtR = (v: number) => padT + ih - (v / yMaxR) * ih;
   const yAtFor = (s: ChartSeries) => (s.rightAxis ? yAtR : yAtL);
@@ -236,8 +338,11 @@ function plotSvg(data: VehicleCountSeries, series: ChartSeries[]): string {
     .map((f) => {
       const v = Math.round(yMaxL * f);
       const y = yAtL(v);
+      const rlabel = rightIsPct
+        ? `${Math.round(yMaxR * f)}%`
+        : abbrev(Math.round(yMaxR * f));
       const right = hasRight
-        ? `<text x="${W - padR + 4}" y="${(y + 3).toFixed(1)}" class="cm-ylab cm-ylab-right">${abbrev(Math.round(yMaxR * f))}</text>`
+        ? `<text x="${W - padR + 4}" y="${(y + 3).toFixed(1)}" class="cm-ylab cm-ylab-right">${rlabel}</text>`
         : "";
       return `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" class="cm-grid"/>
         <text x="${padL - 4}" y="${(y + 3).toFixed(1)}" class="cm-ylab">${v}</text>${right}`;

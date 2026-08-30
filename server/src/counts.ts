@@ -75,6 +75,11 @@ export class CountStore {
           t: p.t,
           subway: p.subway,
           bus: p.bus,
+          // Preserve the per-borough active breakdown when present.
+          busActiveBoro:
+            p.busActiveBoro && typeof p.busActiveBoro === "object"
+              ? p.busActiveBoro
+              : undefined,
           ferry: p.ferry,
           subwayDelayed: Number.isFinite(p.subwayDelayed) ? p.subwayDelayed : 0,
           busDelayed: Number.isFinite(p.busDelayed) ? p.busDelayed : 0,
@@ -84,6 +89,14 @@ export class CountStore {
               ? p.busDelayedBoro
               : undefined,
           ferryDelayed: Number.isFinite(p.ferryDelayed) ? p.ferryDelayed : 0,
+          // Severe tier (≥ 10 min); absent on points predating it → 0/undefined.
+          subwayVeryDelayed: Number.isFinite(p.subwayVeryDelayed) ? p.subwayVeryDelayed : 0,
+          busVeryDelayed: Number.isFinite(p.busVeryDelayed) ? p.busVeryDelayed : 0,
+          busVeryDelayedBoro:
+            p.busVeryDelayedBoro && typeof p.busVeryDelayedBoro === "object"
+              ? p.busVeryDelayedBoro
+              : undefined,
+          ferryVeryDelayed: Number.isFinite(p.ferryVeryDelayed) ? p.ferryVeryDelayed : 0,
           cars: Number.isFinite(p.cars) ? p.cars : 0,
         }))
         .sort((a, b) => a.t - b.t);

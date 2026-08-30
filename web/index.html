@@ -37,6 +37,19 @@
         display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
         max-width: 190px;
       }
+
+      /* Mobile menu button (a hamburger that opens the controls panel). Hidden
+         on desktop; shown only in mobile layouts (see the mobile blocks below). */
+      #menu-fab {
+        display: none;
+        position: absolute; top: 10px; right: 10px; z-index: 21;
+        width: 42px; height: 42px; align-items: center; justify-content: center;
+        background: rgba(0,0,0,0.72); color: #fff;
+        border: 1px solid rgba(255,255,255,0.25); border-radius: 9px;
+        font-size: 19px; line-height: 1; cursor: pointer; user-select: none;
+        box-shadow: 0 1px 6px rgba(0,0,0,0.4);
+      }
+      #menu-fab.active { background: rgba(11,96,214,0.9); border-color: #7cc4f2; }
       /* Shared toggle-button style (matches the original look). */
       .ctl-btn {
         background: rgba(0,0,0,0.65); color: #fff; border: 1px solid rgba(255,255,255,0.25);
@@ -81,38 +94,81 @@
       .bus-zoom label { display: block; margin-bottom: 2px; opacity: 0.85; }
       .bus-zoom input[type="range"] { width: 100%; }
 
-      /* Mobile: smaller, tighter controls so they don't dominate the screen.
-         Applies when auto-detected mobile (unless the user forced desktop) OR
-         when the user explicitly forces mobile from the View toggle. The rule
-         list is duplicated because CSS can't combine a media query and a class
-         selector with OR in a single block. */
+      /* ------------------------------------------------------------------
+         Mobile layout: declutter.
+
+         The old mobile styling just shrank the always-visible control stack,
+         which still covered a big chunk of a phone screen. Instead we now:
+           - collapse ALL controls into a slide-in panel behind a ☰ menu button
+           - make the HUD a compact single-line status chip
+           - hide the line legend (it wraps to many rows on a phone)
+           - keep the status strip but tighten it
+
+         The rules are duplicated for the media query (auto-detected mobile,
+         unless the user forced desktop) and for the `.tp-force-mobile` class
+         (user forced mobile from the View toggle), because CSS can't OR a media
+         query with a class selector in one block. The shared declarations live
+         in the `.tp-mobile-on` helper class toggled by config.ts; the two
+         wrappers below just switch the menu button / panel visibility. */
+
+      /* Shared mobile declarations, applied whenever <html> has tp-mobile-on. */
+      html.tp-mobile-on #menu-fab { display: flex; }
+      html.tp-mobile-on #controls {
+        top: 0; left: 0; right: 0; bottom: 0; max-width: none;
+        padding: 62px 16px 20px; gap: 8px; overflow-y: auto;
+        background: rgba(8,11,16,0.94);
+        transform: translateX(100%); transition: transform 0.22s ease;
+        pointer-events: none;
+      }
+      html.tp-mobile-on.tp-menu-open #controls {
+        transform: translateX(0); pointer-events: auto;
+      }
+      html.tp-mobile-on #controls .ctl-btn { font-size: 15px; padding: 11px 13px; }
+      html.tp-mobile-on #bus-group { padding: 10px; }
+      html.tp-mobile-on #bus-group .bg-title { font-size: 14px; margin-bottom: 7px; }
+      html.tp-mobile-on .bus-boro { font-size: 14px; padding: 8px 10px; margin-bottom: 6px; }
+      html.tp-mobile-on .bus-zoom { font-size: 13px; }
+      /* Compact HUD: hide the verbose lines, keep status + counts on one chip. */
+      html.tp-mobile-on #hud { min-width: 0; padding: 6px 9px; font-size: 11px; }
+      html.tp-mobile-on #hud .hud-lastpush,
+      html.tp-mobile-on #hud .hud-line,
+      html.tp-mobile-on #hud .hud-hint { display: none; }
+      html.tp-mobile-on #hud .hud-modes { gap: 8px; margin: 2px 0 0; font-size: 12px; }
+      /* Legend is too tall on phones; hide it (lines are on the map anyway). */
+      html.tp-mobile-on #legend { display: none; }
+      /* Tighten the top status strip so it clears the menu button. */
+      html.tp-mobile-on #status-strip { max-width: calc(100vw - 120px); font-size: 11px; padding: 4px 8px; }
+      /* Full-width modal cards on phones. */
+      html.tp-mobile-on #counts-modal .cm-card { width: 96%; max-height: 92vh; padding: 14px; }
+      html.tp-mobile-on #counts-modal .cm-legend { gap: 8px 12px; font-size: 11px; }
+
+      /* Turn tp-mobile-on ON for auto-detected mobile (media query) unless the
+         user forced desktop. config.ts also adds it for forced mobile. */
       @media (max-width: 640px), (pointer: coarse) {
+        html:not(.tp-force-desktop) #menu-fab { display: flex; }
         html:not(.tp-force-desktop) #controls {
-          top: 132px; left: 6px; gap: 4px; max-width: 132px;
+          top: 0; left: 0; right: 0; bottom: 0; max-width: none;
+          padding: 62px 16px 20px; gap: 8px; overflow-y: auto;
+          background: rgba(8,11,16,0.94);
+          transform: translateX(100%); transition: transform 0.22s ease;
+          pointer-events: none;
         }
-        html:not(.tp-force-desktop) .ctl-btn {
-          padding: 4px 7px; font-size: 11px; border-radius: 5px;
+        html:not(.tp-force-desktop).tp-menu-open #controls {
+          transform: translateX(0); pointer-events: auto;
         }
-        html:not(.tp-force-desktop) #bus-group { padding: 4px; }
-        html:not(.tp-force-desktop) #bus-group .bg-title { font-size: 11px; margin-bottom: 3px; }
-        html:not(.tp-force-desktop) .bus-boro { padding: 3px 6px; font-size: 10px; margin-bottom: 3px; }
-        html:not(.tp-force-desktop) .bus-zoom { font-size: 10px; }
-        html:not(.tp-force-desktop) #legend { max-width: 150px; padding: 6px 7px; font-size: 11px; }
-        html:not(.tp-force-desktop) #legend .lg-bullet { width: 17px; height: 17px; font-size: 10px; }
+        html:not(.tp-force-desktop) #controls .ctl-btn { font-size: 15px; padding: 11px 13px; }
+        html:not(.tp-force-desktop) #bus-group { padding: 10px; }
+        html:not(.tp-force-desktop) #bus-group .bg-title { font-size: 14px; margin-bottom: 7px; }
+        html:not(.tp-force-desktop) .bus-boro { font-size: 14px; padding: 8px 10px; margin-bottom: 6px; }
+        html:not(.tp-force-desktop) .bus-zoom { font-size: 13px; }
+        html:not(.tp-force-desktop) #hud { min-width: 0; padding: 6px 9px; font-size: 11px; }
+        html:not(.tp-force-desktop) #hud .hud-lastpush,
+        html:not(.tp-force-desktop) #hud .hud-line,
+        html:not(.tp-force-desktop) #hud .hud-hint { display: none; }
+        html:not(.tp-force-desktop) #hud .hud-modes { gap: 8px; margin: 2px 0 0; font-size: 12px; }
+        html:not(.tp-force-desktop) #legend { display: none; }
+        html:not(.tp-force-desktop) #status-strip { max-width: calc(100vw - 120px); font-size: 11px; padding: 4px 8px; }
       }
-      /* Forced-mobile: same compact styling on any screen size. */
-      html.tp-force-mobile #controls {
-        top: 132px; left: 6px; gap: 4px; max-width: 132px;
-      }
-      html.tp-force-mobile .ctl-btn {
-        padding: 4px 7px; font-size: 11px; border-radius: 5px;
-      }
-      html.tp-force-mobile #bus-group { padding: 4px; }
-      html.tp-force-mobile #bus-group .bg-title { font-size: 11px; margin-bottom: 3px; }
-      html.tp-force-mobile .bus-boro { padding: 3px 6px; font-size: 10px; margin-bottom: 3px; }
-      html.tp-force-mobile .bus-zoom { font-size: 10px; }
-      html.tp-force-mobile #legend { max-width: 150px; padding: 6px 7px; font-size: 11px; }
-      html.tp-force-mobile #legend .lg-bullet { width: 17px; height: 17px; font-size: 10px; }
 
       .tp-ferry {
         display: inline-flex; align-items: center; justify-content: center;
@@ -256,6 +312,11 @@
       #counts-modal .cm-legend span { display: inline-flex; align-items: center; gap: 5px; }
       #counts-modal .cm-swatch { width: 12px; height: 3px; border-radius: 2px; display: inline-block; }
       #counts-modal .cm-axis-note { color: #64748b; font-size: 10px; font-style: italic; }
+      #counts-modal .cm-norm-toggle {
+        margin: 4px 0 6px; padding: 4px 10px; border: 1px solid #334155; border-radius: 6px;
+        background: #1b2431; color: #cbd5e1; font-size: 11px; font-weight: 600; cursor: pointer;
+      }
+      #counts-modal .cm-norm-toggle:hover { background: #24303f; }
       #counts-modal .cm-close {
         margin-top: 14px; width: 100%; padding: 8px; border: none; border-radius: 6px;
         background: #334155; color: #fff; font-weight: 700; font-size: 13px; cursor: pointer;
@@ -603,6 +664,7 @@
   <body>
     <div id="map"></div>
     <div id="hud"><div class="hud-status connecting">● Connecting…</div></div>
+    <button id="menu-fab" type="button" aria-label="Menu" title="Controls">☰</button>
     <div id="controls">
       <button id="hotspots-toggle" class="ctl-btn" title="Show delay hotspots">Hotspots: Off</button>
       <button id="trackrecords-toggle" class="ctl-btn" title="Show reliability track records">Track Records: Off</button>
@@ -640,8 +702,13 @@
         <div class="cm-chart cm-chart-active"></div>
         <div class="cm-legend cm-legend-active"></div>
         <div class="cm-sub cm-sub-delay">Delayed vehicles (predicted delay ≥ 2 min). Subway &amp; ferry on the left axis; buses split by borough on the right axis.</div>
+        <button class="cm-norm-toggle" type="button">Bus lateness: Count</button>
         <div class="cm-chart cm-chart-delay"></div>
         <div class="cm-legend cm-legend-delay"></div>
+        <div class="cm-sub cm-sub-delay">Severely delayed vehicles (predicted delay ≥ 10 min). Subway &amp; ferry on the left axis; buses split by borough on the right axis.</div>
+        <button class="cm-norm-toggle cm-norm-toggle-severe" type="button">Bus lateness: Count</button>
+        <div class="cm-chart cm-chart-delay-severe"></div>
+        <div class="cm-legend cm-legend-delay-severe"></div>
         <button class="cm-close" type="button">Close</button>
       </div>
     </div>

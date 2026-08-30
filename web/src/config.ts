@@ -73,10 +73,14 @@ export const IS_MOBILE: boolean =
   VIEW_MODE === "mobile" ? true : VIEW_MODE === "desktop" ? false : autoMobile;
 
 // Tag <html> so CSS can force the compact layout regardless of screen size.
+// `tp-mobile-on` is the single class the mobile stylesheet keys off; it's set
+// whenever the effective layout is mobile (auto-detected or forced), so the
+// hamburger menu + compact HUD apply consistently.
 if (typeof document !== "undefined") {
   const el = document.documentElement;
   el.classList.toggle("tp-force-mobile", VIEW_MODE === "mobile");
   el.classList.toggle("tp-force-desktop", VIEW_MODE === "desktop");
+  el.classList.toggle("tp-mobile-on", IS_MOBILE);
 }
 
 /** Advance auto → mobile → desktop → auto, persist, and reload to re-apply. */

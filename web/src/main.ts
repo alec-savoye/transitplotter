@@ -95,6 +95,9 @@ async function main() {
   // "View" toggle — force Auto/Mobile/Desktop layout + perf profile.
   setupViewToggle();
 
+  // Mobile: hamburger button that slides the controls panel in/out.
+  setupMobileMenu();
+
   // Hidden admin: quadruple-click the map to open the visitor-stats overlay.
   attachAdmin(map, SERVER_HTTP);
 
@@ -155,6 +158,39 @@ function setupBusControls(map: maplibregl.Map) {
       apply(Number(slider.value));
     });
   }
+}
+
+/**
+ * Mobile menu: the ☰ button toggles `tp-menu-open` on <html>, which slides the
+ * controls panel in (see index.html CSS). Tapping a control auto-closes it so
+ * the map is visible again, and tapping the map/backdrop closes it too. On
+ * desktop the button is hidden and this is a no-op.
+ */
+function setupMobileMenu() {
+  const fab = document.getElementById("menu-fab");
+  const controls = document.getElementById("controls");
+  if (!fab || !controls) return;
+  const root = document.documentElement;
+  const setOpen = (open: boolean) => {
+    root.classList.toggle("tp-menu-open", open);
+    fab.classList.toggle("active", open);
+    fab.textContent = open ? "✕" : "☰";
+  };
+  fab.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setOpen(!root.classList.contains("tp-menu-open"));
+  });
+  // Close after activating a top-level control so the map returns — but NOT for
+  // the per-borough bus toggles (users often flip several in a row).
+  controls.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    const btn = t.closest("button");
+    if (btn && !btn.classList.contains("bus-boro")) setOpen(false);
+  });
+  // Tapping the map closes an open menu.
+  document.getElementById("map")?.addEventListener("click", () => {
+    if (root.classList.contains("tp-menu-open")) setOpen(false);
+  });
 }
 
 /**

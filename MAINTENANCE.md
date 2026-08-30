@@ -293,15 +293,24 @@ as "small / medium / large."
 ## 5. Module reference — web
 
 Files under `web/src/`. **All CSS and the DOM scaffold live in
-`web/index.html`** (~440 lines of inline CSS) — there are no separate `.css`
+`web/index.html`** (~500 lines of inline CSS) — there are no separate `.css`
 files. If a control looks wrong, the style is in `index.html`, not in a `.ts`.
+The **mobile layout** also lives there: rules keyed off `html.tp-mobile-on`
+collapse the control stack into a slide-in panel behind the `#menu-fab` ☰
+button, shrink the HUD to a status chip, and hide the legend. Those rules are
+duplicated once under `@media (max-width:640px),(pointer:coarse)` (auto-detected
+devices) and once under the `tp-mobile-on` class (added by `config.ts` for
+forced-mobile) because CSS can't OR a media query with a class in one block.
 
 - **`main.ts`** — Bootstrap and wiring. Creates the map, fetches `/routes`, adds
   layers, then constructs/attaches every UI piece: legend, train popups, station
   panel, alerts UI, trip planner, hotspots, track records, ferries toggle,
-  per-borough bus controls, **view-mode toggle**, hidden admin. Opens the
-  WebSocket, renders the HUD, fires the `/visit` beacon. This is the "what talks
-  to what" file for the frontend.
+  per-borough bus controls, **view-mode toggle**, **mobile menu**, hidden admin.
+  Opens the WebSocket, renders the HUD, fires the `/visit` beacon. This is the
+  "what talks to what" file for the frontend. `setupMobileMenu()` wires the ☰
+  button that slides the controls panel in/out on mobile (toggles `tp-menu-open`
+  on `<html>`); tapping a top-level control auto-closes it (bus-borough toggles
+  are exempt so several can be flipped in a row), as does tapping the map.
 - **`config.ts`** — Two responsibilities:
   1. **Backend host resolution.** LAN/http → `host:8090`; HTTPS → same-origin
      `/api` + `/ws` (assumes a Caddy proxy). Overridable via Vite env
@@ -309,7 +318,9 @@ files. If a control looks wrong, the style is in `index.html`, not in a `.ts`.
   2. **View mode** (`auto` / `mobile` / `desktop`) — the single source of truth
      for `IS_MOBILE`, persisted in `localStorage["tp-view"]`, with
      `cycleViewMode()` (reloads to re-apply). Tags `<html>` with
-     `tp-force-mobile` / `tp-force-desktop` so CSS can force the layout.
+     `tp-force-mobile` / `tp-force-desktop` (explicit override) **and
+     `tp-mobile-on`** (the effective-mobile flag the mobile stylesheet keys
+     off), so CSS can force/declutter the layout.
 - **`basemap.ts`** — Builds the MapLibre map (Esri World Imagery satellite,
   3D pitch on desktop / flat on mobile, `pixelRatio` capped on mobile) and every
   layer: routes, ferry routes, disrupted overlay, station dots/pins (canvas
@@ -361,18 +372,24 @@ files. If a control looks wrong, the style is in `index.html`, not in a `.ts`.
   is a substring match on the concatenated `routes` prop (e.g. "ACE"); express
   suffixes ("6X") map to the base line's stations.
 - **`counts-modal.ts`** — `setupCountsModal`: double-click / double-tap the Live
-  HUD to open a modal with two stacked 48-hour line charts (active vehicles,
-  then delayed vehicles). The **active** chart plots subway/bus/ferry on the
-  left axis and estimated **cars** on a **right-hand Y axis** (their own scale,
-  since cars are ~1000× the transit counts); the "Cars (est.)" control toggles
-  that series (and the HUD 🚗 line) on/off via `carsShown()` in `main.ts`. The
-  **delayed** chart keeps subway + ferry on the left axis and splits **delayed
-  buses by borough** (5 lines from `VehicleCountPoint.busDelayedBoro`) onto the
-  **right-hand Y axis** — delayed buses run ~1–2 orders of magnitude higher, so
-  a shared axis would flatten subway/ferry. Fetches a static snapshot from
-  `/counts` on open; renders inline SVG via a shared `plotSvg` (left/right axis
-  chosen per series). X axis is a fixed 48h window; the pre-data gap is shaded
-  "no data".
+  HUD to open a modal with **three** stacked 48-hour line charts: active
+  vehicles, delayed (≥ 2 min), and severely delayed (≥ 10 min). The **active**
+  chart plots subway/bus/ferry on the left axis and estimated **cars** on a
+  **right-hand Y axis** (their own scale, since cars are ~1000× the transit
+  counts); the "Cars (est.)" control toggles that series (and the HUD 🚗 line)
+  on/off via `carsShown()` in `main.ts`. The two **delay** charts share one
+  `bindDelayChart(tier, suffix)` implementation, differing only by a `DelayTier`
+  accessor (`TIER_DELAYED` reads `*Delayed`/`busDelayedBoro`; `TIER_VERY_DELAYED`
+  reads `*VeryDelayed`/`busVeryDelayedBoro`). Each keeps subway + ferry on the
+  left axis and splits its **buses by borough** (5 lines) onto the **right-hand
+  Y axis** — delayed buses run ~1–2 orders of magnitude higher, so a shared axis
+  would flatten subway/ferry. Each delay chart has its **own** "Bus lateness:
+  Count / % of active" toggle (independent per chart) that renormalizes the bus
+  lines to `busXDelayedBoro / busActiveBoro` on a fixed 0–100 % right axis.
+  Fetches a static snapshot from `/counts` on open; renders inline SVG via a
+  shared `plotSvg` (left/right axis chosen per series; right axis can be pinned
+  via `rightMax` for the % scale). X axis is a fixed 48h window; the pre-data gap
+  is shaded "no data".
 
 ---
 
@@ -478,12 +495,15 @@ flowchart LR
   `{ n, mean, p50, p95 }` (meters), reported as `overall`, `byMode`, `byRoute`;
   plus an `InterpErrorDay[]` trend and a `note` flagging that subway is a
   snap-magnitude *proxy* while bus/ferry is true GPS error. See §6.5.
-- **Vehicle counts** (`/counts`): `VehicleCountPoint` `{ t, subway, bus, ferry,
-  subwayDelayed, busDelayed, busDelayedBoro?, ferryDelayed, cars }` sampled per
-  poll (`busDelayedBoro` is a per-borough map of delayed buses that sums to
-  `busDelayed`; absent on points recorded before it existed);
-  `VehicleCountSeries` `{ windowMs, now, points[] }` is a rolling 48h window.
-  Older points predating a field (e.g. `*Delayed`, `cars`) default to `0`.
+- **Vehicle counts** (`/counts`): `VehicleCountPoint` `{ t, subway, bus,
+  busActiveBoro?, ferry, subwayDelayed, busDelayed, busDelayedBoro?,
+  ferryDelayed, subwayVeryDelayed?, busVeryDelayed?, busVeryDelayedBoro?,
+  ferryVeryDelayed?, cars }` sampled per poll. The `*Boro` fields are
+  per-borough maps that sum to their aggregate (`busActiveBoro`→`bus`,
+  `busDelayedBoro`→`busDelayed`, `busVeryDelayedBoro`→`busVeryDelayed`); the
+  `*VeryDelayed*` tier is delay ≥ 10 min (a subset of the ≥ 2 min `*Delayed`
+  tier). `VehicleCountSeries` `{ windowMs, now, points[] }` is a rolling 48h
+  window. Older points predating a field default to `0`/absent.
 
 **Rule of thumb:** any change to a field name or meaning here must be made on
 both the producer (server) and consumer (web) in the same commit, because
@@ -712,6 +732,16 @@ The root cause was rebuilding a ~1000-feature GeoJSON at 60fps. Guards now in
 place: FPS cap (`TARGET_FPS`), capped `pixelRatio`, flat map on mobile. If it
 recurs on old devices, lower the mobile `TARGET_FPS` (e.g. 8) or hide buses by
 default on mobile. Use the **View → Mobile** toggle on a desktop to reproduce.
+
+### "Mobile controls are missing / the ☰ menu won't open"
+On mobile the controls collapse behind the `#menu-fab` ☰ button (top-right);
+they're not gone, just hidden until you tap it. The button appears only when
+`<html>` carries `tp-mobile-on` (auto-detected touch/small screen, or View →
+Mobile). If it's stuck: the open/close state is the `tp-menu-open` class on
+`<html>` toggled in `setupMobileMenu()` (`main.ts`); verify that ran and that
+`config.ts` added `tp-mobile-on`. To get the full desktop control stack on a
+phone, use **View → Desktop** (sets `tp-force-desktop`, which suppresses the
+mobile rules).
 
 ### "Buses/ferries are missing"
 - Buses need `BUS_API_KEY`. If unset, the bus feed URLs are invalid and buses

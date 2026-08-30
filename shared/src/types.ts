@@ -332,6 +332,13 @@ export interface VehicleCountPoint {
   subway: number;
   /** Active buses (enabled boroughs). */
   bus: number;
+  /**
+   * Active buses broken down by borough code (manhattan | brooklyn | bronx |
+   * queens | statenisland). Sums to `bus`. Absent on points persisted before
+   * the breakdown existed — treat missing boroughs as 0. Used together with
+   * `busDelayedBoro` to compute per-borough normalized lateness (late/total).
+   */
+  busActiveBoro?: Partial<Record<string, number>>;
   /** Active ferries. */
   ferry: number;
   /** Delayed subway trains (predicted delay ≥ 120s). */
@@ -346,6 +353,15 @@ export interface VehicleCountPoint {
   busDelayedBoro?: Partial<Record<string, number>>;
   /** Delayed ferries (predicted delay ≥ 120s; ferries carry no delay signal, so 0). */
   ferryDelayed: number;
+  /**
+   * Severely-delayed counts (predicted delay ≥ 600s / 10 min). Same shape as the
+   * ≥120s fields above, for the second delay chart. Absent on points persisted
+   * before this tier existed — treat missing values as 0.
+   */
+  subwayVeryDelayed?: number;
+  busVeryDelayed?: number;
+  busVeryDelayedBoro?: Partial<Record<string, number>>;
+  ferryVeryDelayed?: number;
   /**
    * Estimated cars on NYC roads at this instant (synthesized from live traffic
    * speeds, CRZ-calibrated). 0 for points recorded before the traffic feed was

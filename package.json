@@ -14,12 +14,15 @@
     "dev:web": "npm run dev --workspace web"
   },
   "devDependencies": {
-    "tsx": "^4.19.2",
-    "typescript": "^5.7.2",
+    "@types/adm-zip": "^0.5.7",
+    "@types/jest": "^30.0.0",
     "@types/node": "^22.10.2",
     "adm-zip": "^0.5.16",
-    "csv-parse": "^5.6.0",
     "better-sqlite3": "^11.7.0",
-    "@types/adm-zip": "^0.5.7"
+    "csv-parse": "^5.6.0",
+    "jest": "^30.4.2",
+    "ts-jest": "^29.4.12",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
   }
 }
