@@ -1,0 +1,36 @@
+{
+  "id": "alert001",
+  "agencyId": "MTASBWY",
+  "routes": ["6"],
+  "stops": ["8096", "8097", "8098"],
+  "header": "Delays expected on 6 train between Columbus Circle and 42 St",
+  "description": "Track maintenance causing 10-15 minute delays",
+  "severity": 2,
+  "effect": "UNKNOWN",
+  "activeStart": 1700000000,
+  "activeEnd": null
+},
+{
+  "id": "alert002",
+  "agencyId": "MTASBWY",
+  "routes": ["A"],
+  "stops": ["1", "2", "3"],
+  "header": "Service Suspended on A train at City Hall",
+  "description": "Signal problems prevent service between South Ferry and City Hall",
+  "severity": 3,
+  "effect": "UNKNOWN",
+  "activeStart": 1700000000,
+  "activeEnd": null
+},
+{
+  "id": "alert003",
+  "agencyId": "MTASBWY",
+  "routes": ["1", "2", "3"],
+  "stops": [],
+  "header": "Planned weekend work on 1 train",
+  "description": "Scheduled maintenance on tracks",
+  "severity": 1,
+  "effect": "UNKNOWN",
+  "activeStart": 1700000000,
+  "activeEnd": null
+}
